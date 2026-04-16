@@ -1,2058 +1,741 @@
-import {useState,useEffect,useRef,useCallback} from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 
-const flashStyle = `
-@keyframes btnPulse {
-  0% { transform: scale(1); }
-  25% { transform: scale(0.88); background-color: #7ada3a; color: #0a2000; }
-  70% { transform: scale(1.05); }
-  100% { transform: scale(1); }
-}
-.btn-flash:active {
-  animation: btnPulse 0.35s ease-out;
-}
-`;
-
-// ── Constantes ────────────────────────────────────────────────────────────────
-const CATEGORIAS=["Ternero/a","Novillito","Novillo","Vaquillona","Vaca","Toro","Torito"];
-const SEXOS=["Macho","Hembra"];
-const RAZAS=["Aberdeen Angus","Hereford","Brahman","Limousin","Charolais","Shorthorn","Brangus","Criolla","Cruza","Otra"];
-const ACTIVIDADES_AGRO=["Siembra","Cosecha","Fertilización","Fumigación","Herbicida","Riego","Rastrojo","Laboreo","Encalado","Otro"];
-const CULTIVOS=["Soja","Maíz","Trigo","Girasol","Sorgo","Cebada","Avena","Pasturas","Verdeo","Otro"];
-const TIPOS_ALERTA=["Vacunación","Desparasitación","Revisión veterinaria","Vencimiento","Mantenimiento","Parto esperado","Otro"];
-const MARCAS_COLORES=[
-  {k:"rojo",label:"Rojo"},
-  {k:"amarillo",label:"Amarillo"},
-  {k:"verde",label:"Verde"},
-  {k:"azul",label:"Azul"},
-];
-const MARCAS_MOTIVOS=["Vaca vieja","Descarte","Revisar veterinario","Preñada","Destete","Flaco/a","Cojera","Tratamiento","Separar","Otro"];
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-function hoy(){return new Date().toISOString().split("T")[0];}
-function fmtFecha(f){
-  if(!f)return "—";
-  var d=new Date(f+"T12:00:00");
-  return d.toLocaleDateString("es-AR",{day:"2-digit",month:"2-digit",year:"numeric"});
-}
-function calcEdad(fechaNac){
-  if(!fechaNac)return null;
-  var hoyD=new Date();
-  var nac=new Date(fechaNac+"T12:00:00");
-  var dias=Math.floor((hoyD-nac)/86400000);
-  if(dias<0)return null;
-  if(dias<30)return dias+" días";
-  var meses=Math.floor(dias/30.4);
-  if(meses<12)return meses+" meses";
-  var anios=Math.floor(meses/12);
-  var mr=meses%12;
-  return anios+" año"+(anios>1?"s":"")+(mr>0?" "+mr+" mes"+(mr>1?"es":""):"");
-}
-function colorEmoji(c){
-  if(c==="rojo")return "🔴";
-  if(c==="amarillo")return "🟡";
-  if(c==="verde")return "🟢";
-  return "🔵";
-}
-function marcaColor(c){
-  if(c==="rojo")return "bg-red-800 border-red-600 text-red-200";
-  if(c==="amarillo")return "bg-amber-700 border-amber-500 text-amber-200";
-  if(c==="verde")return "bg-green-800 border-green-600 text-green-200";
-  return "bg-blue-800 border-blue-600 text-blue-200";
-}
-function marcaBgCard(marcas){
-  if(!marcas||marcas.length===0)return "bg-[#0a1607] border-[#1a2e10] hover:border-[#3a6a18]";
-  var c=marcas[0].color;
-  if(c==="rojo")return "bg-red-50 border-red-300 hover:border-red-400";
-  if(c==="amarillo")return "bg-amber-50 border-amber-300 hover:border-amber-400";
-  if(c==="verde")return "bg-green-50 border-green-300 hover:border-green-400";
-  return "bg-blue-50 border-blue-300 hover:border-blue-400";
-}
-function gdpTotal(pesajes){
-  if(!pesajes||pesajes.length<2)return null;
-  var sorted=[...pesajes].sort(function(a,b){return new Date(a.fecha)-new Date(b.fecha);});
-  var first=sorted[0],last=sorted[sorted.length-1];
-  var dias=Math.round((new Date(last.fecha)-new Date(first.fecha))/86400000);
-  if(dias===0)return null;
-  return ((last.peso-first.peso)/dias).toFixed(3);
-}
-function ultimoPeso(pesajes){
-  if(!pesajes||pesajes.length===0)return null;
-  return [...pesajes].sort(function(a,b){return new Date(b.fecha)-new Date(a.fecha);})[0].peso;
-}
-function sumarDias(fecha,dias){
-  var d=new Date(fecha+"T12:00:00");
-  d.setDate(d.getDate()+dias);
-  return d.toISOString().split("T")[0];
-}
-function estadoAlerta(fechaHora,pasada){
-  if(pasada)return "pasada";
-  var diff=new Date(fechaHora)-new Date();
-  if(diff<0)return "pasada";
-  if(diff<86400000*3)return "urgente";
-  if(diff<86400000*7)return "pronto";
-  return "ok";
-}
+const CATEGORIAS = ["Ternero/a","Novillito","Novillo","Vaquillona","Vaca","Toro","Torito"];
+const SEXOS = ["Macho","Hembra"];
 
 // ── Storage ───────────────────────────────────────────────────────────────────
-function leerStorage(clave,def){
-  try{var x=localStorage.getItem(clave);return x?JSON.parse(x):def;}catch(e){return def;}
-}
-function guardarStorage(clave,val){
-  try{localStorage.setItem(clave,JSON.stringify(val));}catch(e){}
-}
-
-// ── Export ────────────────────────────────────────────────────────────────────
-function exportDatosRodeo(animales,nombre){
-  var headers=["Caravana","Sexo","Categoría","Raza","F.Nacimiento","Edad","Último peso","GDP total","Obs"];
-  var rows=animales.map(function(a){
-    var up=ultimoPeso(a.pesajes);
-    var g=gdpTotal(a.pesajes);
-    return [
-      a.caravana,a.sexo,a.categoria,a.raza||"",
-      a.fechaNac?fmtFecha(a.fechaNac):"",
-      a.fechaNac?calcEdad(a.fechaNac)||"":"",
-      up?up+"kg":"",
-      g!==null?g+" kg/d":"",
-      a.obs||""
-    ];
-  });
-  return {titulo:"Rodeo: "+nombre,headers,rows};
-}
-function exportDatosSesion(sesion,nombreLote){
-  var headers=["Caravana","Sexo","Categoría","Peso kg","GDP kg/d","Kg ganados","Días"];
-  var rows=sesion.registros.map(function(r){
-    return [r.caravana,r.sexo||"",r.categoria||"",r.peso,
-      r.gdpAnimal!==null&&r.gdpAnimal!==undefined?r.gdpAnimal:"",
-      r.kgGanados!==undefined?r.kgGanados:"",
-      r.diasTranscurridos!==undefined?r.diasTranscurridos:""];
-  });
-  return {titulo:"Sesión "+nombreLote+" - "+fmtFecha(sesion.fecha),headers,rows};
+function useStorage(key,ini){
+  const[v,s]=useState(()=>{try{const x=localStorage.getItem(key);return x?JSON.parse(x):ini}catch{return ini}});
+  useEffect(()=>{try{localStorage.setItem(key,JSON.stringify(v))}catch{}},[key,v]);
+  return[v,s];
 }
 
-// ── UI base ───────────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function gdpTotal(pesajes){
+  if(!pesajes||pesajes.length<2)return null;
+  const s=[...pesajes].sort((a,b)=>new Date(a.fecha)-new Date(b.fecha));
+  const dias=(new Date(s[s.length-1].fecha)-new Date(s[0].fecha))/86400000;
+  if(dias<=0)return null;
+  return((s[s.length-1].peso-s[0].peso)/dias).toFixed(3);
+}
+function hoy(){return new Date().toISOString().slice(0,10)}
+function fmtFecha(f){return new Date(f+"T12:00:00").toLocaleDateString("es-AR",{day:"2-digit",month:"2-digit",year:"numeric"})}
+function ultimoPeso(animales_pesajes){return [...(animales_pesajes||[])].sort((a,b)=>new Date(b.fecha)-new Date(a.fecha))[0]?.peso??null}
+
+// ── UI Base ───────────────────────────────────────────────────────────────────
 function Badge({text,color}){
-  var cls="text-xs px-2 py-0.5 rounded-full font-semibold border ";
-  if(color==="macho")cls+="bg-blue-900 text-blue-300 border-blue-700";
-  else if(color==="hembra")cls+="bg-pink-900 text-pink-300 border-pink-700";
-  else cls+="bg-[#1a2e10] text-[#7aaa40] border-[#2a4a18]";
-  return <span className={cls}>{text}</span>;
+  const c={macho:"bg-sky-800 text-sky-100 border-sky-600",hembra:"bg-rose-800 text-rose-100 border-rose-600"};
+  return <span className={`text-xs px-2 py-0.5 rounded-full font-semibold border ${c[color]||"bg-amber-800 text-amber-100 border-amber-600"}`}>{text}</span>
 }
-function Inp({label,className,value,onChange,type,placeholder,inputRef}){
-  return(
-    <div className={"flex flex-col gap-1 "+(className||"")}>
-      {label&&<label className="text-[10px] text-green-600 font-bold uppercase tracking-wider">{label}</label>}
-      <input ref={inputRef} type={type||"text"} value={value} onChange={onChange} placeholder={placeholder||""}
-        className="bg-[#162208] border border-[#2a4a18] rounded-xl px-3 py-2.5 text-[#dff0b0] text-sm focus:outline-none focus:border-[#6ab020] placeholder-[#3a5a20]"/>
-    </div>
-  );
-}
-function Sel({label,options,value,onChange}){
-  return(
-    <div className="flex flex-col gap-1">
-      {label&&<label className="text-[10px] text-green-600 font-bold uppercase tracking-wider">{label}</label>}
-      <select value={value} onChange={onChange} className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-gray-800 text-sm focus:outline-none focus:border-green-400">
-        <option value="">— Elegir —</option>
-        {options.map(function(o){return <option key={o} value={o}>{o}</option>;})}
-      </select>
-    </div>
-  );
-}
+
 function Modal({title,onClose,children}){
   return(
-    <div className="fixed inset-0 z-50 flex items-end justify-center" style={{background:"rgba(0,0,0,0.5)"}}>
-      <div className="w-full max-w-xl rounded-t-3xl flex flex-col shadow-2xl" style={{height:"95vh",background:"#ffffff"}}>
-        <div className="flex items-center justify-between px-5 pt-4 pb-3 shrink-0 border-b border-gray-100">
-          <h2 className="text-lg font-black text-gray-800">{title}</h2>
-          <button onClick={onClose} className="bg-gray-100 hover:bg-gray-200 active:scale-95 text-gray-600 font-bold text-sm px-4 py-2 rounded-xl transition-all">✕</button>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-blue-950/80 backdrop-blur-sm p-3">
+      <div className="bg-[#3d6b20] border border-[#6aaa38] rounded-2xl w-full max-w-md shadow-2xl max-h-[92vh] flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-[#5a9028] shrink-0">
+          <h2 className="text-base font-bold text-[#e8f8c0]">{title}</h2>
+          <button onClick={onClose} className="text-[#c8f080] hover:text-white text-xl w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/10 transition-colors">✕</button>
         </div>
-        <div className="overflow-y-auto px-5 pb-6" style={{flex:"1 1 0",minHeight:0}}>
-          <div className="py-3">{children}</div>
-        </div>
+        <div className="p-5 overflow-y-auto">{children}</div>
       </div>
     </div>
-  );
+  )
 }
-function useConfirm(){
-  var [state,setState]=useState(null);
-  function ask(msg,onOk){setState({msg,onOk});}
-  var dialog=state?(
-    <div className="fixed inset-0 z-[60] flex items-center justify-center" style={{background:"rgba(0,0,0,0.7)"}}>
-      <div className="mx-4 rounded-2xl p-6 flex flex-col gap-4 max-w-sm w-full" style={{background:"#74acdf"}}>
-        <p className="text-gray-800 font-bold text-base text-center">{state.msg}</p>
-        <div className="flex gap-3">
-          <button onClick={function(){setState(null);}} className="flex-1 py-2.5 rounded-xl bg-gray-100 text-gray-700 font-bold border border-gray-200">Cancelar</button>
-          <button onClick={function(){state.onOk();setState(null);}} className="flex-1 py-2.5 rounded-xl bg-red-600 text-white font-bold border border-red-800">Eliminar</button>
-        </div>
-      </div>
+
+function Inp({label,className="",inputRef,...p}){
+  return(
+    <div className={`flex flex-col gap-1 ${className}`}>
+      {label&&<label className="text-[10px] text-[#90c060] font-bold uppercase tracking-wider">{label}</label>}
+      <input ref={inputRef} {...p} className="bg-[#2a5015] border border-[#5a9028] rounded-xl px-3 py-2.5 text-[#eaf8c0] text-sm focus:outline-none focus:border-[#8ad030] placeholder-[#4a7030] transition-colors"/>
     </div>
-  ):null;
-  return [ask,dialog];
+  )
 }
 
-// ── Export Modal ──────────────────────────────────────────────────────────────
-function ExportModal({titulo,headers,rows,onClose}){
-  var [copiado,setCopiado]=useState(false);
-  function copiar(){
-    var txt=[headers.join("\t"),...rows.map(function(r){return r.join("\t");})].join("\n");
-    if(navigator.clipboard){
-      navigator.clipboard.writeText(txt).then(function(){setCopiado(true);setTimeout(function(){setCopiado(false);},2000);});
-    }
-  }
-  var txt=[headers.join("\t"),...rows.map(function(r){return r.join("\t");})].join("\n");
+function Sel({label,options,className="",...p}){
   return(
-    <Modal title={"📊 "+titulo} onClose={onClose}>
-      <div className="flex flex-col gap-3">
-        <p className="text-sm text-[#3a5a20]">Copiá y pegá en Excel o Google Sheets</p>
-        <textarea readOnly value={txt} rows={6} className="w-full bg-[#0a1207] border border-[#1e3010] rounded-xl px-3 py-2 text-[#dff0b0] text-xs font-mono focus:outline-none resize-none"/>
-        <button onClick={copiar} style={{boxShadow:"0 4px 0 #000"}} className={"w-full font-bold py-3 rounded-xl text-base active:translate-y-1 active:shadow-none border-2 "+(copiado?"bg-green-600 border-green-400 text-white":"bg-[#5aaa22] border-[#7ada3a] text-[#0a2000]")}>
-          {copiado?"✓ Copiado!":"📋 Copiar"}
-        </button>
-      </div>
-    </Modal>
-  );
-}
-
-// ── Nuevo Lote Modal ──────────────────────────────────────────────────────────
-function NuevoLoteModal({loteEditar,onClose,onSave}){
-  var [nombre,setNombre]=useState(loteEditar?loteEditar.nombre:"");
-  var [tipo,setTipo]=useState(loteEditar?loteEditar.tipo:"ganaderia");
-  var ref=useRef();
-  useEffect(function(){if(ref.current)ref.current.focus();},[]);
-  function save(){if(!nombre.trim())return;onSave(nombre.trim(),tipo);onClose();}
-  return(
-    <Modal title={loteEditar?"✏️ Renombrar lote":"➕ Nuevo lote"} onClose={onClose}>
-      <div className="flex flex-col gap-3">
-        <Inp label="Nombre del lote" value={nombre} onChange={function(e){setNombre(e.target.value);}} inputRef={ref}
-          placeholder="Ej: Campo Norte, Rodeo 1..."/>
-        {!loteEditar&&(
-          <div className="flex flex-col gap-2">
-            <label className="text-[10px] text-green-600 font-bold uppercase">Tipo de lote</label>
-            <div className="grid grid-cols-3 gap-2">
-              {[["ganaderia","🐄","Ganadería"],["agricultura","🌾","Agricultura"],["mixto","🔄","Mixto"]].map(function(item){
-                return(
-                  <button key={item[0]} onClick={function(){setTipo(item[0]);}}
-                    className={"flex flex-col items-center py-3 rounded-xl border-2 text-xs font-bold transition-all "+(tipo===item[0]?"bg-[#1a3a10] border-[#5aaa22] text-[#c8e6a0]":"bg-[#0a1207] border-[#1e3010] text-[#3a5a20]")}>
-                    <span className="text-2xl mb-1">{item[1]}</span>{item[2]}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
-        <button onClick={save} style={{boxShadow:"0 4px 0 #000"}} className="w-full bg-[#5aaa22] active:translate-y-1 active:shadow-none text-[#0a2000] font-black py-3 rounded-xl border-2 border-[#7ada3a]">
-          {loteEditar?"Guardar":"Crear Lote"}
-        </button>
-      </div>
-    </Modal>
-  );
-}
-
-// ── Nuevo Animal Modal ────────────────────────────────────────────────────────
-function NuevoAnimalModal({onClose,onSave,caravanaInicial}){
-  var [f,setF]=useState({caravana:caravanaInicial||"",sexo:"",categoria:"",raza:"",fechaNac:"",obs:"",peso:"",fecha:hoy()});
-  var ref=useRef();
-  useEffect(function(){if(!caravanaInicial&&ref.current)ref.current.focus();},[]);
-  function set(k,v){setF(function(prev){return Object.assign({},prev,{[k]:v});});}
-  function guardar(){
-    if(!f.caravana.trim()||!f.sexo||!f.categoria)return;
-    var animal={id:Date.now(),caravana:f.caravana.trim().toUpperCase(),sexo:f.sexo,categoria:f.categoria,
-      raza:f.raza,fechaNac:f.fechaNac,obs:f.obs,marcas:[],
-      pesajes:f.peso?[{id:Date.now()+1,peso:parseFloat(f.peso),fecha:f.fecha}]:[]};
-    onSave(animal);onClose();
-  }
-  return(
-    <Modal title="➕ Nuevo Animal" onClose={onClose}>
-      <div className="flex flex-col gap-3">
-        <Inp label="Caravana *" value={f.caravana} onChange={function(e){set("caravana",e.target.value);}} inputRef={ref} placeholder="Ej: 1234A"/>
-        <div className="grid grid-cols-2 gap-3">
-          <Sel label="Sexo *" options={SEXOS} value={f.sexo} onChange={function(e){set("sexo",e.target.value);}}/>
-          <Sel label="Categoría *" options={CATEGORIAS} value={f.categoria} onChange={function(e){set("categoria",e.target.value);}}/>
-        </div>
-        <Sel label="Raza" options={RAZAS} value={f.raza} onChange={function(e){set("raza",e.target.value);}}/>
-        <Inp label="Fecha de nac. (opcional)" type="date" value={f.fechaNac} onChange={function(e){set("fechaNac",e.target.value);}}/>
-        <div className="grid grid-cols-2 gap-3">
-          <Inp label="Peso inicial (kg)" type="number" value={f.peso} onChange={function(e){set("peso",e.target.value);}} placeholder="0"/>
-          <Inp label="Fecha peso" type="date" value={f.fecha} onChange={function(e){set("fecha",e.target.value);}}/>
-        </div>
-        <div className="flex flex-col gap-1">
-          <label className="text-[10px] text-green-600 font-bold uppercase">Observaciones</label>
-          <textarea rows={2} value={f.obs} onChange={function(e){set("obs",e.target.value);}} placeholder="Notas sobre el animal..."
-            className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-gray-800 text-sm focus:outline-none focus:border-green-400 resize-none"/>
-        </div>
-        <button onClick={guardar} style={{boxShadow:"0 4px 0 #000"}} className="w-full bg-[#5aaa22] active:translate-y-1 active:shadow-none text-[#0a2000] font-black py-3 rounded-xl border-2 border-[#7ada3a]">
-          Guardar Animal
-        </button>
-      </div>
-    </Modal>
-  );
-}
-
-// ── Marca Form ────────────────────────────────────────────────────────────────
-function MarcaForm({onAdd}){
-  var [show,setShow]=useState(false);
-  var [color,setColor]=useState("rojo");
-  var [motivo,setMotivo]=useState("");
-  var [custom,setCustom]=useState("");
-  if(!show)return(
-    <button onClick={function(){setShow(true);}} className="text-xs text-[#7aaa40] border border-[#2a4a18] py-2 px-3 rounded-xl">+ Agregar marca</button>
-  );
-  return(
-    <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 flex flex-col gap-2">
-      <div className="flex gap-1">
-        {MARCAS_COLORES.map(function(c){
-          var active=color===c.k;
-          var cls="flex-1 py-1.5 rounded-lg text-sm font-bold border "+(active?marcaColor(c.k)+" border":"bg-[#0a1207] border-[#1e3010] text-[#3a5a20]");
-          return <button key={c.k} onClick={function(){setColor(c.k);}} className={cls}>{colorEmoji(c.k)}</button>;
-        })}
-      </div>
-      <select value={motivo} onChange={function(e){setMotivo(e.target.value);}} className="bg-[#162208] border border-[#2a4a18] rounded-xl px-3 py-2 text-[#dff0b0] text-sm focus:outline-none">
-        <option value="">— Motivo —</option>
-        {MARCAS_MOTIVOS.map(function(m){return <option key={m} value={m}>{m}</option>;})}
-        <option value="__otro">✏️ Otro</option>
+    <div className={`flex flex-col gap-1 ${className}`}>
+      {label&&<label className="text-[10px] text-[#90c060] font-bold uppercase tracking-wider">{label}</label>}
+      <select {...p} className="bg-[#2a5015] border border-[#5a9028] rounded-xl px-3 py-2.5 text-[#eaf8c0] text-sm focus:outline-none focus:border-[#8ad030] transition-colors">
+        <option value="">— Seleccionar —</option>
+        {options.map(o=><option key={o} value={o}>{o}</option>)}
       </select>
-      {motivo==="__otro"&&<input value={custom} onChange={function(e){setCustom(e.target.value);}} onKeyDown={function(e){if(e.key==="Enter"&&custom.trim()){onAdd({id:Date.now(),color,motivo:custom.trim()});setShow(false);setMotivo("");setCustom("");setColor("rojo");}}} placeholder="Escribí el motivo..." autoFocus className="bg-[#162208] border border-[#2a4a18] rounded-xl px-3 py-2 text-[#dff0b0] text-sm focus:outline-none"/>}
-      <div className="flex gap-2">
-        <button onClick={function(){setShow(false);}} className="flex-1 py-1.5 rounded-xl border border-[#2a4a18] text-[#5a8a30] text-xs">Cancelar</button>
-        <button onClick={function(){
-          var m=motivo==="__otro"?custom.trim():motivo;
-          if(!m)return;
-          onAdd({id:Date.now(),color,motivo:m});
-          setShow(false);setMotivo("");setCustom("");setColor("rojo");
-        }} className="flex-1 py-1.5 rounded-xl bg-[#4a8a18] text-[#dff0b0] font-bold text-xs border border-[#6aca28]">Guardar</button>
-      </div>
     </div>
-  );
+  )
 }
 
-// ── Detalle Animal Modal ──────────────────────────────────────────────────────
-function DetalleModal({animal,onClose,onUpdate,onDelete,lotes,loteActualId,establecimientos,estId,onMoverEst}){
-  var [tab,setTab]=useState("info");
-  var [obs,setObs]=useState(animal.obs||"");
-  var [peso,setPeso]=useState("");
-  var [fecha,setFecha]=useState(hoy());
-  var [showMover,setShowMover]=useState(false);
-  var [loteDestino,setLoteDestino]=useState("");
-  var [showMoverEst,setShowMoverEst]=useState(false);
-  var [estDestino,setEstDestino]=useState("");
-  var [loteEnEst,setLoteEnEst]=useState("");
-  var [ask,confirmDialog]=useConfirm();
-  var pesoRef=useRef();
-  var sorted=[...(animal.pesajes||[])].sort(function(a,b){return new Date(b.fecha)-new Date(a.fecha);});
-  var up=ultimoPeso(animal.pesajes);
-  var g=gdpTotal(animal.pesajes);
-  var otrosLotes=lotes.filter(function(l){return l.id!==loteActualId;});
-  var estDestinoObj=establecimientos&&estDestino?(establecimientos.find(function(e){return e.id===parseInt(estDestino);})||null):null;
-
-  function addPeso(){
-    if(!peso)return;
-    onUpdate(Object.assign({},animal,{pesajes:[...(animal.pesajes||[]),{id:Date.now(),peso:parseFloat(peso),fecha}]}));
-    setPeso("");
-    if(pesoRef.current)pesoRef.current.focus();
-  }
-
-  var infoData=[
-    ["Sexo",animal.sexo],["Categoría",animal.categoria],["Raza",animal.raza||"—"],
-    ["F. Nacimiento",animal.fechaNac?fmtFecha(animal.fechaNac):"—"],
-    ["Edad",animal.fechaNac?calcEdad(animal.fechaNac)||"—":"—"],
-    ["Último peso",up?up+" kg":"—"],
-    ["GDP total",g!==null?g+" kg/d":"—"]
-  ];
-
+// ── Nuevo Lote ────────────────────────────────────────────────────────────────
+function NuevoLoteModal({onClose,onSave,loteEditar=null}){
+  const[nombre,setNombre]=useState(loteEditar?.nombre||"");
+  const ref=useRef();
+  useEffect(()=>{ref.current?.focus()},[]);
+  const save=()=>{if(!nombre.trim())return alert("Ingresá un nombre.");onSave(nombre.trim());onClose()};
   return(
-    <Modal title={"Caravana "+animal.caravana} onClose={onClose}>
-      <div className="flex gap-1 mb-3 bg-gray-100 rounded-xl p-1">
-        {["info","pesajes"].map(function(t){
-          return(
-            <button key={t} onClick={function(){setTab(t);}}
-              className={"flex-1 py-3 rounded-xl text-sm font-black tracking-wider border-2 transition-all "+(tab===t?"bg-green-100 border-green-400 text-green-800":"bg-white border-green-300 text-green-600")}>
-              {t==="info"?"📋 Info":"⚖️ Pesajes"}
-            </button>
-          );
-        })}
+    <Modal title={loteEditar?"✏️ Renombrar Lote":"🌿 Nuevo Lote"} onClose={onClose}>
+      <div className="flex flex-col gap-4">
+        <Inp label="Nombre del lote" inputRef={ref} placeholder="Ej: Potrero Norte, Corral Engorde..." value={nombre} onChange={e=>setNombre(e.target.value)} onKeyDown={e=>e.key==="Enter"&&save()}/>
+        <button onClick={save} className="w-full bg-[#5aaa22] hover:bg-[#6aca2a] text-[#0a2000] font-bold py-3 rounded-xl text-sm transition-colors border border-[#7ada3a]">{loteEditar?"Guardar nombre":"Crear Lote"}</button>
       </div>
-
-      {tab==="info"&&(
-        <div className="flex flex-col gap-2">
-          {/* Stats compactos en 2 filas */}
-          <div className="grid grid-cols-3 gap-1.5">
-            {[["Sexo",animal.sexo],["Categoría",animal.categoria],["Raza",animal.raza||"—"],
-              ["F. Nac.",animal.fechaNac?fmtFecha(animal.fechaNac):"—"],
-              ["Edad",animal.fechaNac?calcEdad(animal.fechaNac)||"—":"—"],
-              ["Último kg",up?up+" kg":"—"]
-            ].map(function(item){
-              return(
-                <div key={item[0]} className="bg-gray-50 border border-gray-200 rounded-xl px-2 py-2 text-center">
-                  <p className="text-[9px] text-green-600 uppercase font-bold mb-0.5">{item[0]}</p>
-                  <p className="text-gray-800 font-bold text-xs leading-tight">{item[1]}</p>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* GDP si existe */}
-          {g!==null&&(
-            <div className={"rounded-xl px-3 py-2 text-center border "+(parseFloat(g)>=0?"bg-green-900/30 border-green-700":"bg-red-900/30 border-red-700")}>
-              <p className="text-[9px] uppercase font-bold text-[#7aaa40] mb-0.5">GDP total</p>
-              <p className={"font-black text-base "+(parseFloat(g)>=0?"text-green-300":"text-red-300")}>{g+" kg/d"}</p>
-            </div>
-          )}
-
-          {/* Obs */}
-          <div className="flex flex-col gap-1">
-            <label className="text-[10px] text-[#b8e878] font-bold uppercase">Observaciones</label>
-            <div className="flex gap-2">
-              <textarea rows={2} value={obs} onChange={function(e){setObs(e.target.value);}}
-                className="flex-1 bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-gray-800 text-sm focus:outline-none focus:border-green-400 resize-none"/>
-              <button onClick={function(){onUpdate(Object.assign({},animal,{obs}));}} className="self-end text-xs bg-green-100 text-green-700 border border-green-300 px-3 py-2 rounded-lg font-bold">💾</button>
-            </div>
-          </div>
-
-          {/* Marcas */}
-          <div className="flex flex-col gap-1.5">
-            <p className="text-[10px] text-green-600 font-bold uppercase">🏷️ Marcas</p>
-            <div className="flex flex-wrap gap-1">
-              {(animal.marcas||[]).map(function(m){
-                return(
-                  <div key={m.id} className={"flex items-center gap-1 px-2 py-1 rounded-full border text-xs font-bold "+marcaColor(m.color)}>
-                    <span>{colorEmoji(m.color)+" "+m.motivo}</span>
-                    <button onClick={function(){onUpdate(Object.assign({},animal,{marcas:(animal.marcas||[]).filter(function(x){return x.id!==m.id;})}));}} className="opacity-60 hover:opacity-100 ml-1">✕</button>
-                  </div>
-                );
-              })}
-            </div>
-            <MarcaForm onAdd={function(m){onUpdate(Object.assign({},animal,{marcas:[...(animal.marcas||[]),m]}));}}/>
-          </div>
-
-          {/* Acciones */}
-          <div className="flex flex-col gap-1.5 border-t border-gray-100 pt-2">
-            {otrosLotes.length>0&&!showMover&&(
-              <button onClick={function(){setShowMover(true);}} className="w-full text-sm text-blue-600 border border-blue-200 bg-blue-50 py-2 rounded-xl font-medium">🔀 Mover a otro lote</button>
-            )}
-            {showMover&&(
-              <div className="flex flex-col gap-1.5">
-                <select value={loteDestino} onChange={function(e){setLoteDestino(e.target.value);}} className="bg-[#2a5015] border border-[#5a9028] rounded-xl px-3 py-2 text-[#eaf8c0] text-sm focus:outline-none">
-                  <option value="">— Elegir lote —</option>
-                  {otrosLotes.map(function(l){return <option key={l.id} value={l.id}>{l.nombre}</option>;})}
-                </select>
-                <div className="flex gap-2">
-                  <button onClick={function(){setShowMover(false);}} className="flex-1 text-sm text-[#7a9a50] border border-[#2a4a18] py-2 rounded-xl">Cancelar</button>
-                  <button onClick={function(){if(!loteDestino)return;onUpdate(Object.assign({},animal,{_moverA:loteDestino}));onClose();}} className="flex-1 bg-[#1a72b8] text-white font-bold py-2 rounded-xl text-sm">Confirmar</button>
-                </div>
-              </div>
-            )}
-            {establecimientos&&establecimientos.length>1&&!showMoverEst&&(
-              <button onClick={function(){setShowMoverEst(true);}} className="w-full text-sm text-orange-600 border border-orange-200 bg-orange-50 py-2 rounded-xl font-medium">🏡 Mover a otro establecimiento</button>
-            )}
-            {showMoverEst&&(
-              <div className="flex flex-col gap-1.5">
-                <select value={estDestino} onChange={function(e){setEstDestino(e.target.value);setLoteEnEst("");}} className="bg-[#2a1a08] border border-[#704030] rounded-xl px-3 py-2 text-[#f0c090] text-sm focus:outline-none">
-                  <option value="">— Establecimiento —</option>
-                  {establecimientos.filter(function(e){return e.id!==estId;}).map(function(e){return <option key={e.id} value={e.id}>{e.nombre}</option>;})}
-                </select>
-                {estDestinoObj&&(
-                  <select value={loteEnEst} onChange={function(e){setLoteEnEst(e.target.value);}} className="bg-[#2a1a08] border border-[#704030] rounded-xl px-3 py-2 text-[#f0c090] text-sm focus:outline-none">
-                    <option value="">— Lote destino —</option>
-                    {(estDestinoObj.lotes||[]).map(function(l){return <option key={l.id} value={l.id}>{l.nombre}</option>;})}
-                  </select>
-                )}
-                <div className="flex gap-2">
-                  <button onClick={function(){setShowMoverEst(false);}} className="flex-1 text-sm text-[#7a9a50] border border-[#2a4a18] py-2 rounded-xl">Cancelar</button>
-                  <button onClick={function(){if(!estDestino||!loteEnEst)return;onMoverEst&&onMoverEst(parseInt(estDestino),parseInt(loteEnEst));onClose();}} className="flex-1 bg-[#b05020] text-white font-bold py-2 rounded-xl text-sm">Confirmar</button>
-                </div>
-              </div>
-            )}
-            <button onClick={function(){ask("¿Eliminar este animal?",function(){onDelete(animal.id);onClose();});}} className="self-start text-xs text-red-400 border border-red-700 px-3 py-1.5 rounded-lg">🗑 Eliminar</button>
-          </div>
-        </div>
-      )}
-
-      {tab==="pesajes"&&(
-        <div className="flex flex-col gap-2">
-          <div className="flex gap-2">
-            <input ref={pesoRef} type="number" inputMode="decimal" value={peso} onChange={function(e){setPeso(e.target.value);}}
-              onKeyDown={function(e){if(e.key==="Enter")addPeso();}}
-              placeholder="kg" className="flex-1 bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-gray-800 text-sm focus:outline-none focus:border-green-400"/>
-            <input type="date" value={fecha} onChange={function(e){setFecha(e.target.value);}} className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-gray-800 text-sm focus:outline-none focus:border-green-400"/>
-          </div>
-          <button onClick={addPeso} style={{boxShadow:"0 4px 0 #000"}} className="w-full bg-[#5aaa22] active:translate-y-1 active:shadow-none text-[#0a2000] font-black py-2.5 rounded-xl border-2 border-[#7ada3a]">+ Agregar pesaje</button>
-          <div className="flex flex-col gap-1.5 max-h-48 overflow-y-auto">
-            {sorted.map(function(p){
-              return(
-                <div key={p.id} className="flex items-center justify-between bg-gray-50 border border-gray-100 rounded-xl px-4 py-2">
-                  <div>
-                    <p className="text-gray-800 font-bold">{p.peso+" kg"}</p>
-                    <p className="text-green-600 text-xs">{fmtFecha(p.fecha)}</p>
-                  </div>
-                  <button onClick={function(){onUpdate(Object.assign({},animal,{pesajes:(animal.pesajes||[]).filter(function(x){return x.id!==p.id;})}));}} className="text-red-500 text-lg">✕</button>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-      {confirmDialog}
     </Modal>
   )
 }
 
-// ── Sesión de Pesaje ──────────────────────────────────────────────────────────
-function SesionPesaje({loteId,allLotes,setLotes,nombreLote,sesionInicial,onPausar,onFinalizar}){
-  var [log,setLog]=useState(sesionInicial?sesionInicial.registros:[]);
-  var [fecha]=useState(sesionInicial?sesionInicial.fecha:hoy());
-  var [busq,setBusq]=useState("");
-  var [encontrado,setEncontrado]=useState(null);
-  var [peso,setPeso]=useState("");
-  var [flash,setFlash]=useState(false);
-  var busqRef=useRef();
-  var pesoRef=useRef();
-  useEffect(function(){if(busqRef.current)busqRef.current.focus();},[]);
+// ── Nuevo Animal ──────────────────────────────────────────────────────────────
+function NuevoAnimalModal({onClose,onSave,caravanaInicial=""}){
+  const[f,setF]=useState({caravana:caravanaInicial,sexo:"",categoria:"",obs:"",peso:"",fecha:hoy()});
+  const ref=useRef();
+  useEffect(()=>{if(!caravanaInicial)ref.current?.focus()},[]);
+  const set=(k,v)=>setF(p=>({...p,[k]:v}));
+  const save=()=>{
+    if(!f.caravana.trim())return alert("Ingresá la caravana.");
+    if(!f.sexo)return alert("Seleccioná el sexo.");
+    if(!f.categoria)return alert("Seleccioná la categoría.");
+    onSave({id:Date.now(),caravana:f.caravana.trim().toUpperCase(),sexo:f.sexo,categoria:f.categoria,obs:f.obs,
+      pesajes:f.peso?[{id:Date.now(),peso:parseFloat(f.peso),fecha:f.fecha}]:[]});
+    onClose();
+  };
+  return(
+    <Modal title="🐄 Nuevo Animal" onClose={onClose}>
+      <div className="flex flex-col gap-3">
+        <Inp label="N° Caravana" inputRef={ref} placeholder="Ej: 001234" value={f.caravana} onChange={e=>set("caravana",e.target.value)}/>
+        <div className="grid grid-cols-2 gap-3">
+          <Sel label="Sexo" options={SEXOS} value={f.sexo} onChange={e=>set("sexo",e.target.value)}/>
+          <Sel label="Categoría" options={CATEGORIAS} value={f.categoria} onChange={e=>set("categoria",e.target.value)}/>
+        </div>
+        <div className="border-t border-[#3a6020] pt-3">
+          <p className="text-[10px] text-[#90c060] uppercase tracking-wider font-bold mb-2">Pesaje inicial (opcional)</p>
+          <div className="grid grid-cols-2 gap-3">
+            <Inp label="Peso (kg)" type="number" placeholder="320" value={f.peso} onChange={e=>set("peso",e.target.value)}/>
+            <Inp label="Fecha" type="date" value={f.fecha} onChange={e=>set("fecha",e.target.value)}/>
+          </div>
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] text-[#90c060] font-bold uppercase tracking-wider">Observaciones</label>
+          <textarea rows={2} value={f.obs} onChange={e=>set("obs",e.target.value)} placeholder="Notas..."
+            className="bg-[#2a5015] border border-[#5a9028] rounded-xl px-3 py-2 text-[#eaf8c0] text-sm focus:outline-none focus:border-[#8ad030] resize-none placeholder-[#4a7030]"/>
+        </div>
+        <button onClick={save} className="w-full bg-[#5aaa22] hover:bg-[#6aca2a] text-[#0a2000] font-bold py-3 rounded-xl text-sm transition-colors border border-[#7ada3a]">Guardar Animal</button>
+      </div>
+    </Modal>
+  )
+}
 
-  var animalesActuales=(allLotes.find(function(l){return l.id===loteId;})||{animales:[]}).animales||[];
+// ── Detalle Animal ────────────────────────────────────────────────────────────
+function DetalleModal({animal,onClose,onUpdate,onDelete,lotes,loteActualId}){
+  const[tab,setTab]=useState("info");
+  const[obs,setObs]=useState(animal.obs||"");
+  const[peso,setPeso]=useState("");
+  const[fecha,setFecha]=useState(hoy());
+  const[showMover,setShowMover]=useState(false);
+  const[loteDestino,setLoteDestino]=useState("");
+  const pesoRef=useRef();
+  const sorted=[...(animal.pesajes||[])].sort((a,b)=>new Date(b.fecha)-new Date(a.fecha));
+  const up=ultimoPeso(animal.pesajes);
+  const g=gdpTotal(animal.pesajes);
+  const addPeso=()=>{
+    if(!peso)return pesoRef.current?.focus();
+    onUpdate({...animal,pesajes:[...(animal.pesajes||[]),{id:Date.now(),peso:parseFloat(peso),fecha}]});
+    setPeso("");pesoRef.current?.focus();
+  };
+  const otrosLotes=lotes.filter(l=>l.id!==loteActualId);
+  return(
+    <Modal title={`Caravana ${animal.caravana}`} onClose={onClose}>
+      <div className="flex gap-1 mb-4 bg-[#0f2a40] rounded-xl p-1">
+        {["info","pesajes"].map(t=>(
+          <button key={t} onClick={()=>setTab(t)}
+            className={`flex-1 py-3 rounded-xl text-sm font-black uppercase tracking-wider transition-all border-2 ${tab===t?"bg-[#1a72b8] border-[#4aaae8] text-white shadow-lg":"bg-[#0f2a40] border-[#1a5070] text-[#7ad0f0] hover:border-[#3a8aaa] hover:text-white"}`}>
+            {t==="info"?"📋 Info":"⚖️ Pesajes"}
+          </button>
+        ))}
+      </div>
+      {tab==="info"&&(
+        <div className="flex flex-col gap-3">
+          <div className="grid grid-cols-2 gap-2">
+            {[["Sexo",animal.sexo],["Categoría",animal.categoria],["Último peso",up?`${up} kg`:"—"],["GDP total",g!==null?`${g} kg/d`:"—"]].map(([l,v])=>(
+              <div key={l} className="bg-[#2a5015] border border-[#5a9028] rounded-xl p-3">
+                <p className="text-xs text-[#b8e878] uppercase tracking-wider mb-1 font-bold">{l}</p>
+                <p className={`font-black text-base ${l==="GDP total"&&g!==null?(parseFloat(g)>=0?"text-green-300":"text-red-300"):"text-white"}`}>{v}</p>
+              </div>
+            ))}
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-[10px] text-[#b8e878] font-bold uppercase tracking-wider">Observaciones</label>
+            <textarea rows={3} value={obs} onChange={e=>setObs(e.target.value)}
+              className="bg-[#2a5015] border border-[#5a9028] rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-[#9ad040] resize-none"/>
+            <button onClick={()=>onUpdate({...animal,obs})} className="self-end text-xs bg-[#4a8020] hover:bg-[#5a9a30] text-white border border-[#5a9028] px-3 py-1.5 rounded-lg transition-colors">Guardar</button>
+          </div>
+          {otrosLotes.length>0&&(
+            <div className="border-t border-[#3a6020] pt-3">
+              {!showMover?(
+                <button onClick={()=>setShowMover(true)} className="w-full text-sm text-[#7ad0f0] border border-[#1a5070] hover:bg-[#0f2a40] py-2.5 rounded-xl transition-colors">🔀 Mover a otro lote</button>
+              ):(
+                <div className="flex flex-col gap-2">
+                  <label className="text-[10px] text-[#b8e878] font-bold uppercase tracking-wider">Mover a</label>
+                  <select value={loteDestino} onChange={e=>setLoteDestino(e.target.value)} className="bg-[#2a5015] border border-[#5a9028] rounded-xl px-3 py-2.5 text-[#eaf8c0] text-sm focus:outline-none focus:border-[#8ad030]">
+                    <option value="">— Elegir lote —</option>
+                    {otrosLotes.map(l=><option key={l.id} value={l.id}>{l.nombre}</option>)}
+                  </select>
+                  <div className="flex gap-2">
+                    <button onClick={()=>setShowMover(false)} className="flex-1 text-sm text-[#7a9a50] border border-[#2a4a18] py-2 rounded-xl">Cancelar</button>
+                    <button onClick={()=>{if(!loteDestino)return;onUpdate({...animal,_moverA:loteDestino});onClose()}} className="flex-1 bg-[#1a72b8] hover:bg-[#2a82c8] text-white font-bold py-2 rounded-xl text-sm">Confirmar</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          <button onClick={()=>{if(confirm("¿Eliminar este animal?")){onDelete(animal.id);onClose()}}} className="w-full text-sm text-red-300 border border-red-700 hover:bg-red-900/40 py-2.5 rounded-xl transition-colors">🗑 Eliminar animal</button>
+        </div>
+      )}
+      {tab==="pesajes"&&(
+        <div className="flex flex-col gap-3">
+          <div className="flex gap-2">
+            <input ref={pesoRef} type="number" placeholder="Peso kg" value={peso} onChange={e=>setPeso(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addPeso()}
+              className="flex-1 bg-[#2a5015] border border-[#5a9028] rounded-xl px-3 py-2.5 text-[#eaf8c0] text-sm focus:outline-none focus:border-[#8ad030] placeholder-[#4a7030]"/>
+            <input type="date" value={fecha} onChange={e=>setFecha(e.target.value)} className="bg-[#2a5015] border border-[#5a9028] rounded-xl px-3 py-2 text-[#eaf8c0] text-sm focus:outline-none focus:border-[#8ad030] w-36"/>
+            <button onClick={addPeso} className="bg-[#5aaa22] hover:bg-[#6aca2a] text-[#0a2000] w-10 rounded-xl text-lg font-bold transition-colors shrink-0">+</button>
+          </div>
+          <div className="flex flex-col gap-2 max-h-48 overflow-y-auto pr-1">
+            {sorted.length===0&&<p className="text-[#b8e878] text-sm text-center py-6">Sin pesajes aún</p>}
+            {sorted.map((p,i)=>{
+              const prev=sorted[i+1];let loc=null;
+              if(prev){const d=(new Date(p.fecha)-new Date(prev.fecha))/86400000;if(d>0)loc=((p.peso-prev.peso)/d).toFixed(3)}
+              return(
+                <div key={p.id} className="flex items-center justify-between bg-[#2a5015] border border-[#5a9028] rounded-xl px-3 py-2.5">
+                  <div><p className="text-white font-bold text-sm">{p.peso} kg</p><p className="text-[#c8f080] text-sm font-semibold">{fmtFecha(p.fecha)}</p></div>
+                  <div className="flex items-center gap-3">
+                    {loc!==null&&<span className={`text-xs font-semibold ${parseFloat(loc)>=0?"text-green-300":"text-red-300"}`}>{loc} kg/d</span>}
+                    <button onClick={()=>{if(confirm("¿Eliminar?"))onUpdate({...animal,pesajes:animal.pesajes.filter(x=>x.id!==p.id)})}} className="text-red-500 hover:text-red-300 transition-colors text-lg leading-none">✕</button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+          {g!==null&&(
+            <div className="bg-[#2a5015] border border-[#6aaa30] rounded-xl p-3 text-center">
+              <p className="text-xs text-[#b8e878] font-bold uppercase tracking-wider">GDP total</p>
+              <p className={`text-xl font-bold mt-1 ${parseFloat(g)>=0?"text-green-300":"text-red-300"}`}>{g} kg/día</p>
+            </div>
+          )}
+        </div>
+      )}
+    </Modal>
+  )
+}
 
-  function buscar(val){
-    var q=val.trim().toUpperCase();
-    if(!q){setEncontrado(null);return;}
-    var match=animalesActuales.find(function(a){return a.caravana===q;});
-    if(match){setEncontrado(match);setTimeout(function(){if(pesoRef.current)pesoRef.current.focus();},80);}
-    else setEncontrado(null);
-  }
+// ── Resumen Sesión ────────────────────────────────────────────────────────────
+function ResumenSesionModal({sesion,onClose}){
+  const gdpVals=sesion.registros.map(r=>r.gdpAnimal).filter(v=>v!==null);
+  const gdpProm=gdpVals.length>0?(gdpVals.reduce((s,v)=>s+v,0)/gdpVals.length).toFixed(3):null;
+  const totalKg=sesion.registros.reduce((s,r)=>s+r.peso,0);
+  return(
+    <Modal title="📋 Resumen de Sesión" onClose={onClose}>
+      <div className="flex flex-col gap-4">
+        <div className="text-center pb-2 border-b border-[#3a6020]">
+          <p className="text-[#90c060] text-xs uppercase tracking-wider">Sesión del</p>
+          <p className="text-[#e8f8c0] font-bold text-lg">{fmtFecha(sesion.fecha)}</p>
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          {[["Animales",sesion.registros.length,null],["kg totales",totalKg.toLocaleString("es-AR"),null],["GDP kg/d",gdpProm??"—",gdpProm]].map(([l,v,gv])=>(
+            <div key={l} className="bg-[#2a5015] border border-[#5a9028] rounded-2xl p-3 text-center">
+              <p className={`text-2xl font-black ${gv!==null?(parseFloat(gv)>=0?"text-green-300":"text-red-300"):"text-white"}`}>{v}</p>
+              <p className="text-[10px] text-[#7aaa40] uppercase tracking-wider mt-1">{l}</p>
+            </div>
+          ))}
+        </div>
+        {gdpProm!==null&&(
+          <div className="bg-[#2a5015] border border-[#4a8020] rounded-xl p-3 text-center">
+            <p className="text-xs text-[#90c060]">Ganancia diaria promedio del lote</p>
+            <p className={`text-2xl font-bold mt-1 ${parseFloat(gdpProm)>=0?"text-green-300":"text-red-300"}`}>{gdpProm} kg/animal/día</p>
+          </div>
+        )}
+        <div>
+          <p className="text-[10px] text-[#90c060] uppercase tracking-wider font-bold mb-2">Detalle</p>
+          <div className="flex flex-col gap-1.5 max-h-52 overflow-y-auto pr-1">
+            {sesion.registros.map((r,i)=>(
+              <div key={i} className="flex items-center justify-between bg-[#2a5015] border border-[#5a9028] rounded-xl px-3 py-2">
+                <div><p className="text-white font-bold text-sm">{r.caravana}</p><div className="flex gap-1 mt-0.5"><Badge text={r.sexo} color={r.sexo==="Macho"?"macho":"hembra"}/><Badge text={r.categoria}/></div></div>
+                <div className="text-right"><p className="text-[#a0d060] font-bold text-sm">{r.peso} kg</p>{r.gdpAnimal!==null&&<p className={`text-xs ${r.gdpAnimal>=0?"text-green-300":"text-red-300"}`}>{r.gdpAnimal.toFixed(3)} kg/d</p>}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+        <button onClick={onClose} className="w-full bg-[#5aaa22] hover:bg-[#6aca2a] text-[#0a2000] font-bold py-2.5 rounded-xl text-sm transition-colors border border-[#7ada3a]">Cerrar</button>
+      </div>
+    </Modal>
+  )
+}
 
-  var yaRegistrado=encontrado&&log.some(function(r){return r.caravana===encontrado.caravana;});
-  var noEncontrado=busq.trim().length>0&&!encontrado;
+// ── Historial ─────────────────────────────────────────────────────────────────
+function HistorialModal({sesiones,onClose,onVerSesion,onEliminarSesion}){
+  return(
+    <Modal title="📅 Historial de Sesiones" onClose={onClose}>
+      <div className="flex flex-col gap-2">
+        {sesiones.length===0&&<div className="text-center py-10 text-[#5a8a30]"><p className="text-3xl mb-2">📋</p><p className="text-sm">No hay sesiones guardadas</p></div>}
+        {[...sesiones].sort((a,b)=>b.fecha.localeCompare(a.fecha)).map(s=>{
+          const totalKg=s.registros.reduce((sum,r)=>sum+r.peso,0);
+          const gv=s.registros.map(r=>r.gdpAnimal).filter(v=>v!==null);
+          const gp=gv.length>0?(gv.reduce((a,v)=>a+v,0)/gv.length).toFixed(3):null;
+          return(
+            <div key={s.id} className="bg-[#2a5015] border border-[#5a9028] rounded-2xl overflow-hidden">
+              <button onClick={()=>onVerSesion(s)} className="w-full text-left px-4 py-3 hover:bg-[#3a6020] transition-colors">
+                <div className="flex items-center justify-between mb-1.5">
+                  <p className="text-white font-bold text-sm">{fmtFecha(s.fecha)}</p>
+                  <span className="text-[10px] text-[#7aaa40] bg-[#1a3a10] border border-[#2a5018] px-2 py-0.5 rounded-full">{s.registros.length} animales</span>
+                </div>
+                <div className="flex gap-4">
+                  <div><p className="text-[10px] text-[#7a9a50] uppercase">Total kg</p><p className="text-[#a0d060] font-bold text-sm">{totalKg.toLocaleString("es-AR")} kg</p></div>
+                  <div><p className="text-[10px] text-[#7a9a50] uppercase">GDP prom.</p><p className={`font-bold text-sm ${gp!==null?(parseFloat(gp)>=0?"text-green-300":"text-red-300"):"text-[#4a7030]"}`}>{gp?`${gp} kg/d`:"—"}</p></div>
+                </div>
+              </button>
+              <div className="border-t border-[#3a6020] px-4 py-2 flex justify-end">
+                <button onClick={()=>{if(confirm("¿Eliminar?"))onEliminarSesion(s.id)}} className="text-xs text-red-500 hover:text-red-300 transition-colors">🗑 Eliminar</button>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </Modal>
+  )
+}
 
-  function registrar(){
-    if(!encontrado||!peso)return;
+// ── Modo Manga ────────────────────────────────────────────────────────────────
+// Recibe loteId y setLotes directamente — actualiza el estado global sin closures stale
+function SesionPesaje({loteId,setLotes,onPausar,onFinalizar,sesionInicial,nombreLote}){
+  const[log,setLog]=useState(sesionInicial?.registros||[]);
+  const[fecha]=useState(sesionInicial?.fecha||hoy());
+  const[busq,setBusq]=useState("");
+  const[encontradoId,setEncontradoId]=useState(null);
+  const[peso,setPeso]=useState("");
+  const[flash,setFlash]=useState(false);
+  const[animalesLocales,setAnimalesLocales]=useState([]);
+  const busqRef=useRef();
+  const pesoRef=useRef();
+
+  // Sincronizar animales desde lotes al montar
+  useEffect(()=>{
+    const stored=localStorage.getItem("ganadera_lotes_v1");
+    if(stored){
+      const lotes=JSON.parse(stored);
+      const lote=lotes.find(l=>l.id===loteId);
+      if(lote)setAnimalesLocales(lote.animales||[]);
+    }
+    busqRef.current?.focus();
+  },[]);
+
+  const encontrado=animalesLocales.find(a=>a.id===encontradoId)||null;
+  const yaRegistrado=encontrado&&log.some(r=>r.caravana===encontrado.caravana);
+  const noEncontrado=busq.trim().length>0&&!encontrado;
+
+  const buscar=useCallback((val)=>{
+    const q=val.trim().toUpperCase();
+    if(!q){setEncontradoId(null);return}
+    // Leer siempre del localStorage para tener animales frescos
+    const stored=localStorage.getItem("ganadera_lotes_v1");
+    const lotes=stored?JSON.parse(stored):[];
+    const lote=lotes.find(l=>l.id===loteId);
+    const match=(lote?.animales||[]).find(a=>a.caravana===q);
+    if(match){
+      setAnimalesLocales(lote.animales);
+      setEncontradoId(match.id);
+      setTimeout(()=>pesoRef.current?.focus(),60);
+    } else {
+      setEncontradoId(null);
+    }
+  },[loteId]);
+
+  const handleBusqChange=e=>{setBusq(e.target.value);buscar(e.target.value)};
+  const handleBusqKey=e=>{if(e.key==="Enter")buscar(busq)};
+
+  const registrar=()=>{
+    if(!encontrado||!peso)return pesoRef.current?.focus();
     if(yaRegistrado)return;
-    var np={id:Date.now(),peso:parseFloat(peso),fecha};
-    var animalAct=Object.assign({},encontrado,{pesajes:[...(encontrado.pesajes||[]),np]});
-    setLotes(function(prev){
-      return prev.map(function(l){
+    const np={id:Date.now(),peso:parseFloat(peso),fecha};
+    const animalActualizado={...encontrado,pesajes:[...(encontrado.pesajes||[]),np]};
+    // Actualizar localStorage directamente — siempre fresco
+    setLotes(prev=>{
+      const nuevos=prev.map(l=>{
         if(l.id!==loteId)return l;
-        return Object.assign({},l,{animales:l.animales.map(function(a){return a.id===animalAct.id?animalAct:a;})});
+        return{...l,animales:l.animales.map(a=>a.id===animalActualizado.id?animalActualizado:a)};
       });
+      // Actualizar animalesLocales también
+      const loteNuevo=nuevos.find(l=>l.id===loteId);
+      if(loteNuevo)setAnimalesLocales(loteNuevo.animales);
+      return nuevos;
     });
-    var ga=gdpTotal(animalAct.pesajes);
-    var upAnterior=ultimoPeso(encontrado.pesajes);
-    var diasTrans=encontrado.pesajes&&encontrado.pesajes.length>0?
-      Math.round((new Date(fecha)-new Date([...encontrado.pesajes].sort(function(a,b){return new Date(b.fecha)-new Date(a.fecha);})[0].fecha))/86400000):null;
-    var kgGan=upAnterior!==null?parseFloat((parseFloat(peso)-upAnterior).toFixed(1)):null;
-    setLog(function(prev){return [{caravana:encontrado.caravana,peso:parseFloat(peso),sexo:encontrado.sexo,categoria:encontrado.categoria,
-      gdpAnimal:ga!==null?parseFloat(ga):null,kgGanados:kgGan,diasTranscurridos:diasTrans,marcas:encontrado.marcas||[],id:Date.now()},...prev];});
-    setFlash(true);setTimeout(function(){setFlash(false);},600);
-    setBusq("");setPeso("");setEncontrado(null);
-    if(busqRef.current)setTimeout(function(){busqRef.current.focus();},80);
-  }
+    const ga=gdpTotal(animalActualizado.pesajes);
+    setLog(prev=>[{caravana:encontrado.caravana,peso:parseFloat(peso),sexo:encontrado.sexo,categoria:encontrado.categoria,gdpAnimal:ga!==null?parseFloat(ga):null,id:Date.now()},...prev]);
+    setFlash(true);setTimeout(()=>setFlash(false),600);
+    setBusq("");setPeso("");setEncontradoId(null);
+    setTimeout(()=>busqRef.current?.focus(),80);
+  };
 
-  // Stats barra
-  var totalKg=log.reduce(function(s,r){return s+r.peso;},0);
-  var kgGanTotal=log.filter(function(r){return r.kgGanados!==null;}).reduce(function(s,r){return s+r.kgGanados;},0);
-  var maxPeso=log.length>0?log.reduce(function(m,r){return r.peso>m.peso?r:m;},log[0]):null;
-  var minPeso=log.length>0?log.reduce(function(m,r){return r.peso<m.peso?r:m;},log[0]):null;
+  const totalKg=log.reduce((s,r)=>s+r.peso,0);
+  const gdpVals=log.map(r=>r.gdpAnimal).filter(v=>v!==null);
+  const gdpProm=gdpVals.length>0?(gdpVals.reduce((s,v)=>s+v,0)/gdpVals.length).toFixed(3):null;
 
   return(
-    <div className="fixed inset-0 z-40 flex flex-col" style={{background:"#ffffff"}}>
+    <div className="fixed inset-0 z-40 bg-[#060d04] flex flex-col" style={{fontFamily:"'DM Sans',sans-serif"}}>
       <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700;900&display=swap" rel="stylesheet"/>
-      {/* Header */}
-      <div className="px-4 py-2 shrink-0" style={{background:"#ffffff",borderBottom:"1px solid #e5e7eb"}}>
+      <div className="bg-[#0a1607] border-b border-[#1a3010] px-4 py-3 shrink-0">
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-[10px] text-[#4a6a28] uppercase tracking-widest font-bold">{"Manga · "+nombreLote}</p>
-            <h2 className="text-lg font-bold text-[#c8e6a0]">{"Sesión "+fmtFecha(fecha)}</h2>
+            <p className="text-[10px] text-[#4a6a28] uppercase tracking-widest font-bold">Modo Manga · {nombreLote}</p>
+            <h2 className="text-lg font-bold text-[#c8e6a0]">Sesión de Pesaje</h2>
           </div>
-          <div className="flex gap-2">
-            <button onClick={function(){onPausar({fecha,registros:[...log].reverse()});}} className="bg-[#1a2e10] border border-[#2a4a18] text-[#8ac040] font-bold px-3 py-1.5 rounded-xl text-xs">⏸ Pausar</button>
-            <button onClick={function(){onFinalizar({fecha,registros:[...log].reverse()});}} style={{boxShadow:"0 3px 0 #000"}} className="btn-flash bg-red-700 active:translate-y-1 active:shadow-none text-white font-black px-4 py-1.5 rounded-xl text-sm border-2 border-red-500">FIN</button>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-[#4a6a28] border border-[#1a2e10] px-2 py-1 rounded-lg">{fmtFecha(fecha)}</span>
+            <button onClick={()=>onPausar({fecha,registros:log})} className="bg-[#1a2e10] hover:bg-[#253d18] border border-[#2a4a18] text-[#8ac040] font-bold px-3 py-1.5 rounded-xl text-xs transition-colors">⏸ Pausar</button>
+            <button onClick={()=>onFinalizar({fecha,registros:[...log].reverse()})} className="bg-red-700 hover:bg-red-600 active:scale-95 text-white font-black px-4 py-1.5 rounded-xl text-sm transition-colors shadow-lg">FIN</button>
           </div>
         </div>
       </div>
-      {/* Stats bar */}
+
       {log.length>0&&(
-        <div className="px-4 py-2 shrink-0 flex gap-4 overflow-x-auto" style={{background:"#0a1f07",borderBottom:"1px solid #1a3010"}}>
-          <div className="flex items-center gap-1.5 shrink-0"><span className="text-[10px] text-[#4a6a28] uppercase">Pesados:</span><span className="text-gray-800 font-bold text-sm">{log.length}</span></div>
-          <div className="flex items-center gap-1.5 shrink-0"><span className="text-[10px] text-[#4a6a28] uppercase">Total kg:</span><span className="text-gray-800 font-bold text-sm">{totalKg.toLocaleString("es-AR")}</span></div>
-          {kgGanTotal!==0&&<div className="flex items-center gap-1.5 shrink-0"><span className="text-[10px] text-[#4a6a28] uppercase">Ganados:</span><span className={"font-bold text-sm "+(kgGanTotal>=0?"text-green-400":"text-red-400")}>{(kgGanTotal>0?"+":"")+kgGanTotal.toFixed(1)+" kg"}</span></div>}
-          {maxPeso&&<div className="flex items-center gap-1.5 shrink-0"><span className="text-[10px] text-[#4a6a28] uppercase">Max:</span><span className="text-gray-800 font-bold text-sm">{maxPeso.caravana+" "+maxPeso.peso+"kg"}</span></div>}
+        <div className="bg-[#0a1f07] border-b border-[#1a3010] px-4 py-2 flex gap-5 shrink-0">
+          <div className="flex items-center gap-1.5"><span className="text-[10px] text-[#4a6a28] uppercase">Pesados:</span><span className="text-[#c8e6a0] font-bold text-sm">{log.length}</span></div>
+          <div className="flex items-center gap-1.5"><span className="text-[10px] text-[#4a6a28] uppercase">Total:</span><span className="text-[#c8e6a0] font-bold text-sm">{totalKg.toLocaleString("es-AR")} kg</span></div>
+          {gdpProm&&<div className="flex items-center gap-1.5"><span className="text-[10px] text-[#4a6a28] uppercase">GDP:</span><span className={`font-bold text-sm ${parseFloat(gdpProm)>=0?"text-green-400":"text-red-400"}`}>{gdpProm} kg/d</span></div>}
         </div>
       )}
-      {/* Main */}
+
       <div className="flex-1 overflow-y-auto flex flex-col">
-        <div className="px-4 pt-4 pb-3">
-          <label className="text-[10px] text-[#5a7a30] font-bold uppercase tracking-wider block mb-2">📡 Caravana</label>
-          <input ref={busqRef} value={busq}
-            onChange={function(e){setBusq(e.target.value);buscar(e.target.value);}}
-            onKeyDown={function(e){if(e.key==="Enter"){if(encontrado&&!yaRegistrado&&peso)registrar();else buscar(busq);}}}
-            placeholder="N° caravana..." autoComplete="off" autoCorrect="off" autoCapitalize="characters" spellCheck="false"
-            className={"w-full border-2 rounded-2xl px-4 py-4 text-2xl font-bold tracking-widest focus:outline-none transition-colors "+(flash?"bg-green-900 border-green-500 text-green-200":"bg-[#0a1207] border-[#1e3010] focus:border-[#6ab020] text-[#dff0b0] placeholder-[#1e3010]")}/>
-
-          {/* Animal encontrado */}
+        <div className={`px-4 pt-4 pb-3 transition-all duration-300 ${flash?"bg-green-950/50":""}`}>
+          <div className="flex flex-col gap-1 mb-3">
+            <label className="text-[10px] text-[#7a9a50] font-bold uppercase tracking-wider">📡 Caravana — escaneá o escribí</label>
+            <input ref={busqRef} value={busq} onChange={handleBusqChange} onKeyDown={handleBusqKey}
+              placeholder="N° caravana..." autoComplete="off" autoCorrect="off" autoCapitalize="characters"
+              className="bg-[#0a1207] border-2 border-[#1e3010] focus:border-[#5a9a10] rounded-2xl px-4 py-4 text-[#dff0b0] text-2xl font-bold tracking-widest focus:outline-none placeholder-[#1e3010] transition-colors"/>
+          </div>
           {encontrado&&(
-            <div className="bg-[#0e2208] border border-[#2a5010] rounded-2xl p-3 mt-3 flex flex-col gap-2">
-              {/* Marcas alert */}
-              {(encontrado.marcas||[]).length>0&&(
-                <div className="flex flex-col gap-1">
-                  {(encontrado.marcas||[]).map(function(m){
-                    return <div key={m.id} className={"px-3 py-1.5 rounded-xl border font-bold text-sm "+marcaColor(m.color)}>{colorEmoji(m.color)+" "+m.motivo}</div>;
-                  })}
+            <div className="bg-[#0e2208] border border-[#2a5010] rounded-2xl p-3 mb-3 flex items-center gap-3">
+              <div className="bg-[#1a3a10] rounded-xl w-10 h-10 flex items-center justify-center text-green-400 text-xl font-black border border-[#2a5010]">✓</div>
+              <div className="flex-1 min-w-0">
+                <p className="text-[#c8e6a0] font-bold">{encontrado.caravana}</p>
+                <div className="flex gap-1.5 mt-0.5 flex-wrap">
+                  <Badge text={encontrado.sexo} color={encontrado.sexo==="Macho"?"macho":"hembra"}/>
+                  <Badge text={encontrado.categoria}/>
+                  {ultimoPeso(encontrado.pesajes)&&<span className="text-xs text-[#5a8a30]">Último: {ultimoPeso(encontrado.pesajes)} kg</span>}
                 </div>
-              )}
-              <div className="flex items-center gap-3">
-                <div className="bg-[#1a3a10] rounded-xl w-10 h-10 flex items-center justify-center text-green-400 text-xl font-black border border-[#2a5010]">✓</div>
-                <div className="flex-1">
-                  <p className="text-[#c8e6a0] font-bold">{encontrado.caravana}</p>
-                  <p className="text-[#5a8a30] text-xs">{encontrado.categoria+" · "+encontrado.sexo}</p>
-                  {yaRegistrado&&<p className="text-amber-300 text-xs font-bold">⚠️ Ya registrado</p>}
-                </div>
-              </div>
-              {!yaRegistrado&&(
-                <div className="flex flex-col gap-2">
-                  <input ref={pesoRef} type="number" inputMode="decimal" value={peso}
-                    onChange={function(e){setPeso(e.target.value);}}
-                    onKeyDown={function(e){if(e.key==="Enter")registrar();}}
-                    placeholder="kg" className="w-full bg-[#0a1207] border border-[#2a5010] rounded-xl px-4 py-3 text-[#dff0b0] text-xl font-bold focus:outline-none focus:border-[#6ab020] text-center"/>
-                  <button onClick={registrar} style={{boxShadow:"0 4px 0 #1a3a08"}} className="w-full bg-[#3d7a10] active:translate-y-1 active:shadow-none text-[#dff0b0] rounded-xl py-4 text-2xl font-black border-2 border-[#5aaa20]">ENTER</button>
-                </div>
-              )}
-            </div>
-          )}
-          {noEncontrado&&<p className="mt-2 text-amber-400 text-sm font-bold">{"⚠️ "+busq.trim().toUpperCase()+" — no encontrado"}</p>}
-        </div>
-        {/* Log */}
-        <div className="px-4 pb-4">
-          <p className="text-[10px] text-[#3a5a20] uppercase tracking-wider font-bold mb-2">{log.length+" pesajes"}</p>
-          {log.map(function(r,i){
-            return(
-              <div key={r.id} className={"flex items-center justify-between rounded-xl px-3 py-2.5 mb-1.5 border "+(i===0?"bg-green-900/30 border-green-600":"bg-[#0a1207] border-[#1a2e10]")}>
-                <div>
-                  <p className="text-[#dff0b0] font-bold">{r.caravana}</p>
-                  <p className="text-[#5a8a30] text-xs">{r.categoria}</p>
-                  {(r.marcas||[]).length>0&&<p className="text-xs">{r.marcas.map(function(m){return colorEmoji(m.color);}).join(" ")}</p>}
-                </div>
-                <div className="text-right">
-                  <p className="text-[#dff0b0] font-bold">{r.peso+" kg"}</p>
-                  {r.kgGanados!==null&&r.kgGanados!==undefined&&<p className={"text-xs font-semibold "+(r.kgGanados>=0?"text-green-400":"text-red-400")}>{(r.kgGanados>0?"+":"")+r.kgGanados+" kg"}</p>}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Resumen Sesión Modal ──────────────────────────────────────────────────────
-function ResumenSesionModal({sesion,nombreLote,onClose}){
-  var [exportData,setExportData]=useState(null);
-  var regs=sesion.registros||[];
-  var totalKg=regs.reduce(function(s,r){return s+r.peso;},0);
-  var promKg=regs.length>0?(totalKg/regs.length).toFixed(1):0;
-  var maxR=regs.length>0?regs.reduce(function(m,r){return r.peso>m.peso?r:m;},regs[0]):null;
-  var minR=regs.length>0?regs.reduce(function(m,r){return r.peso<m.peso?r:m;},regs[0]):null;
-  var gdpVals=regs.filter(function(r){return r.gdpAnimal!==null&&r.gdpAnimal!==undefined;});
-  var gdpProm=gdpVals.length>0?(gdpVals.reduce(function(s,r){return s+r.gdpAnimal;},0)/gdpVals.length).toFixed(3):null;
-  var kgGanVals=regs.filter(function(r){return r.kgGanados!==null&&r.kgGanados!==undefined;});
-  var kgGanTotal=kgGanVals.reduce(function(s,r){return s+r.kgGanados;},0);
-
-  var stats=[
-    ["🐄 Animales",regs.length],
-    ["⚖️ Total kg",totalKg.toLocaleString("es-AR")],
-    ["📊 Prom kg",promKg],
-    ["📈 GDP prom",gdpProm?gdpProm+" kg/d":"—"],
-    ["▲ Más pesado",maxR?maxR.caravana+" "+maxR.peso+"kg":"—"],
-    ["▼ Más liviano",minR?minR.caravana+" "+minR.peso+"kg":"—"],
-  ];
-  if(kgGanVals.length>0)stats.push(["💪 Kg ganados",kgGanTotal.toFixed(1)+" kg"]);
-  var diasVals=regs.filter(function(r){return r.diasTranscurridos!==null&&r.diasTranscurridos!==undefined;});
-  var diasProm=diasVals.length>0?Math.round(diasVals.reduce(function(s,r){return s+r.diasTranscurridos;},0)/diasVals.length):null;
-  if(diasProm!==null)stats.push(["📅 Días desde últ. pesaje",diasProm+" días"]);
-
-  return(
-    <Modal title={"📋 Sesión "+fmtFecha(sesion.fecha)} onClose={onClose}>
-      <div className="flex flex-col gap-3">
-        <div className="grid grid-cols-2 gap-2">
-          {stats.map(function(s){
-            return(
-              <div key={s[0]} className="bg-[#0a1607] border border-[#1a2e10] rounded-xl p-3 text-center">
-                <p className="text-[10px] text-[#4a6a28] uppercase font-bold mb-1">{s[0]}</p>
-                <p className="text-[#dff0b0] font-black text-sm">{s[1]}</p>
-              </div>
-            );
-          })}
-        </div>
-        <button onClick={function(){setExportData(exportDatosSesion(sesion,nombreLote));}} className="w-full bg-[#0a1207] border border-[#1e3010] text-[#7aaa40] font-bold py-2.5 rounded-xl text-sm">📊 Exportar a Excel</button>
-        {exportData&&<ExportModal {...exportData} onClose={function(){setExportData(null);}}/>}
-        <div className="flex flex-col gap-1.5 max-h-60 overflow-y-auto">
-          {regs.map(function(r){
-            return(
-              <div key={r.id} className="flex items-center justify-between bg-[#0a1607] border border-[#1a2e10] rounded-xl px-3 py-2">
-                <div>
-                  <p className="text-gray-800 font-bold text-sm">{r.caravana}</p>
-                  <p className="text-[#5a7a30] text-xs">{r.categoria}</p>
-                </div>
-                <div className="text-right">
-                  <p className="text-[#dff0b0] font-bold">{r.peso+" kg"}</p>
-                  {r.kgGanados!==null&&r.kgGanados!==undefined&&<p className={"text-xs "+(r.kgGanados>=0?"text-green-400":"text-red-400")}>{(r.kgGanados>0?"+":"")+r.kgGanados+" kg"}</p>}
-                  {r.gdpAnimal!==null&&r.gdpAnimal!==undefined&&<p className="text-[#6a8a40] text-xs">{r.gdpAnimal+" kg/d"}</p>}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </Modal>
-  );
-}
-
-// ── Historial Modal ───────────────────────────────────────────────────────────
-function HistorialModal({sesiones,onClose,onVerSesion,onEliminarSesion}){
-  var [ask,confirmDialog]=useConfirm();
-  var sorted=[...sesiones].sort(function(a,b){return b.fecha.localeCompare(a.fecha);});
-  return(
-    <Modal title="📅 Historial" onClose={onClose}>
-      <div className="flex flex-col gap-2">
-        {sorted.length===0&&<p className="text-gray-400 text-center py-8">Sin sesiones guardadas</p>}
-        {sorted.map(function(s){
-          var totalKg=s.registros.reduce(function(acc,r){return acc+r.peso;},0);
-          return(
-            <div key={s.id} className="bg-[#0a1607] border border-[#1a2e10] rounded-xl px-4 py-3 flex items-center justify-between">
-              <button onClick={function(){onVerSesion(s);}} className="text-left flex-1">
-                <p className="text-gray-800 font-bold text-sm">{fmtFecha(s.fecha)}</p>
-                <p className="text-[#5a7a30] text-xs">{s.registros.length+" animales · "+totalKg.toLocaleString("es-AR")+" kg"}</p>
-              </button>
-              <button onClick={function(){ask("¿Eliminar esta sesión?",function(){onEliminarSesion(s.id);});}} className="text-red-500 text-lg ml-3">✕</button>
-            </div>
-          );
-        })}
-      </div>
-      {confirmDialog}
-    </Modal>
-  );
-}
-
-// ── Repro Modal ───────────────────────────────────────────────────────────────
-function ReproModal({lote,onClose,onUpdate,toros}){
-  var animales=lote.animales||[];
-  var hembras=animales.filter(function(a){return a.sexo==="Hembra";});
-  var sesiones=lote.reproSesiones||[];
-  var [modo,setModo]=useState("menu");
-  var [sesionActual,setSesionActual]=useState(null);
-  var [log,setLog]=useState([]);
-  var [tipoSesion,setTipoSesion]=useState("tacto");
-  var [busq,setBusq]=useState("");
-  var [encontrada,setEncontrada]=useState(null);
-  var [form,setForm]=useState({resultado:"Preñada",tipo:"Natural",toro:"",vivo:true,sexoTernero:"Macho",caravanaTernero:"",obs:"",fechaServicio:hoy()});
-  var busqRef=useRef();
-  var [ask,confirmDialog]=useConfirm();
-
-  function setF(k,v){setForm(function(p){return Object.assign({},p,{[k]:v});});}
-
-  function iniciar(){
-    setSesionActual({fecha:hoy(),tipo:tipoSesion});
-    setLog([]);setBusq("");setEncontrada(null);
-    setModo("manga");
-  }
-
-  function buscar(val){
-    var q=val.trim().toUpperCase();
-    if(!q){setEncontrada(null);return;}
-    var match=animales.find(function(a){return a.caravana===q;});
-    setEncontrada(match||"notfound");
-  }
-
-  function registrar(){
-    if(!encontrada||encontrada==="notfound")return;
-    if(log.find(function(r){return r.caravana===encontrada.caravana;})){
-      setBusq("");setEncontrada(null);
-      if(busqRef.current)setTimeout(function(){busqRef.current.focus();},80);
-      return;
-    }
-    var reg=Object.assign({id:Date.now(),caravana:encontrada.caravana,categoria:encontrada.categoria},form);
-    if(sesionActual.tipo==="servicio"){
-      reg.fechaPartoProbable=sumarDias(form.fechaServicio,283);
-    }
-    setLog(function(prev){return [reg,...prev];});
-    setBusq("");setEncontrada(null);
-    setForm({resultado:"Preñada",tipo:"Natural",toro:"",vivo:true,sexoTernero:"Macho",caravanaTernero:"",obs:"",fechaServicio:hoy()});
-    if(busqRef.current)setTimeout(function(){busqRef.current.focus();},80);
-  }
-
-  function rodeoCompleto(){
-    var noReg=hembras.filter(function(h){return !log.find(function(r){return r.caravana===h.caravana;});});
-    var fpStr=sumarDias(form.fechaServicio,283);
-    var nuevos=noReg.map(function(h){
-      return {id:Date.now()+Math.random(),caravana:h.caravana,categoria:h.categoria,
-        tipo:form.tipo,toro:form.toro,fechaServicio:form.fechaServicio,fechaPartoProbable:fpStr,obs:"Servicio masivo"};
-    });
-    setLog(function(prev){return [...nuevos,...prev];});
-  }
-
-  function finalizar(){
-    if(log.length===0){setModo("menu");return;}
-    var sesion={id:Date.now(),fecha:sesionActual.fecha,tipo:sesionActual.tipo,registros:[...log].reverse()};
-    var nuevosAnimales=null;
-    if(sesionActual.tipo==="parto"){
-      var terneros=[];
-      log.forEach(function(r){
-        if(r.vivo&&r.caravanaTernero){
-          terneros.push({id:Date.now()+Math.random(),caravana:r.caravanaTernero.trim().toUpperCase(),
-            sexo:r.sexoTernero,categoria:"Ternero/a",raza:"",fechaNac:sesionActual.fecha,
-            obs:"Madre: "+r.caravana,pesajes:[],marcas:[]});
-        }
-      });
-      if(terneros.length>0)nuevosAnimales=[...animales,...terneros];
-    }
-    onUpdate(sesion,nuevosAnimales);
-    setSesionActual(null);setLog([]);setModo("menu");
-  }
-
-  // Stats resumen
-  var todasSes=[...sesiones];
-  var tactos=todasSes.filter(function(s){return s.tipo==="tacto";}).flatMap(function(s){return s.registros;});
-  var servicios=todasSes.filter(function(s){return s.tipo==="servicio";}).flatMap(function(s){return s.registros;});
-  var partos=todasSes.filter(function(s){return s.tipo==="parto";}).flatMap(function(s){return s.registros;});
-  var prenadas=tactos.filter(function(t){return t.resultado==="Preñada";}).length;
-  var hoyD=new Date();
-  var en60=new Date();en60.setDate(en60.getDate()+60);
-  var proxPartos=servicios.filter(function(s){
-    if(!s.fechaPartoProbable)return false;
-    var fp=new Date(s.fechaPartoProbable+"T12:00:00");
-    return fp>=hoyD&&fp<=en60;
-  });
-
-  // ── MENU ──
-  if(modo==="menu"){
-    return(
-      <Modal title="🐄 Gestión Reproductiva" onClose={onClose}>
-        <div className="flex flex-col gap-3">
-          {sesiones.length>0&&(
-            <div className="grid grid-cols-3 gap-2 mb-1">
-              <div className="bg-green-50 border border-green-200 rounded-xl p-3 text-center">
-                <p className="text-xl font-black text-green-700">{prenadas}</p>
-                <p className="text-[10px] text-green-500 uppercase font-bold mt-0.5">Preñadas</p>
-              </div>
-              <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 text-center">
-                <p className="text-xl font-black text-gray-700">{partos.length}</p>
-                <p className="text-[10px] text-gray-400 uppercase font-bold mt-0.5">Partos</p>
-              </div>
-              <div className={"border rounded-xl p-3 text-center "+(proxPartos.length>0?"bg-amber-50 border-amber-300":"bg-gray-50 border-gray-200")}>
-                <p className={"text-xl font-black "+(proxPartos.length>0?"text-amber-600":"text-gray-700")}>{proxPartos.length}</p>
-                <p className={"text-[10px] uppercase font-bold mt-0.5 "+(proxPartos.length>0?"text-amber-400":"text-gray-400")}>Prox. partos</p>
               </div>
             </div>
           )}
-          {sesionActual&&log.length>0&&(
-            <div className="bg-amber-950/30 border border-amber-700 rounded-xl px-4 py-3">
-              <p className="text-amber-300 font-bold text-sm">{"⏸ Sesión pausada · "+(sesionActual.tipo==="tacto"?"Tacto":sesionActual.tipo==="servicio"?"Servicio":"Partos")}</p>
-              <p className="text-amber-600 text-xs">{log.length+" registros"}</p>
-              <div className="flex gap-2 mt-2">
-                <button onClick={function(){setModo("manga");}} style={{boxShadow:"0 3px 0 #000"}} className="flex-1 bg-amber-700 active:translate-y-1 active:shadow-none text-white font-bold py-2 rounded-xl text-sm border border-amber-500">▶ Retomar</button>
-                <button onClick={function(){setSesionActual(null);setLog([]);}} className="flex-1 bg-[#1a0010] text-[#c070a0] font-bold py-2 rounded-xl text-sm border border-[#3a1030]">✕ Descartar</button>
-              </div>
+          {noEncontrado&&(
+            <div className="bg-amber-950/30 border border-amber-900/50 rounded-2xl p-3 mb-3 flex items-center gap-2">
+              <span className="text-amber-500 text-lg shrink-0">⚠</span>
+              <div><p className="text-amber-300 text-sm font-bold">{busq.toUpperCase()} — no registrado en este lote</p></div>
             </div>
           )}
-          <p className="text-xs font-black text-[#c070a0] uppercase">Nueva sesión</p>
-          <div className="grid grid-cols-3 gap-2">
-            {[["tacto","🔍","Tacto"],["servicio","💉","Servicio"],["parto","🐄","Parto"]].map(function(item){
-              return(
-                <button key={item[0]} onClick={function(){setTipoSesion(item[0]);}}
-                  className={"flex flex-col items-center py-3 rounded-xl border-2 font-bold text-xs "+(tipoSesion===item[0]?"bg-[#7a1a4a] border-[#c04080] text-white":"bg-[#1a0010] border-[#3a1030] text-[#c070a0]")}>
-                  <span className="text-2xl mb-1">{item[1]}</span>{item[2]}
-                </button>
-              );
-            })}
-          </div>
-          <button onClick={iniciar} style={{boxShadow:"0 4px 0 #000"}} className="w-full bg-[#1a0010] active:translate-y-1 active:shadow-none text-[#f0b0d0] font-black py-3 rounded-xl text-base border-2 border-[#c04080]">
-            {"Iniciar sesión de "+(tipoSesion==="tacto"?"Tacto":tipoSesion==="servicio"?"Servicio":"Partos")}
-          </button>
-          {sesiones.length>0&&(
-            <div className="flex flex-col gap-2 border-t border-[#2a0018] pt-3">
-              <p className="text-xs font-black text-[#c070a0] uppercase">Historial</p>
-              {[...sesiones].sort(function(a,b){return b.fecha.localeCompare(a.fecha);}).map(function(s){
-                return(
-                  <button key={s.id} onClick={function(){setSesionActual(Object.assign({},s,{soloVer:true}));setLog(s.registros);setModo("resumen");}}
-                    className="w-full text-left bg-[#1a0010] border border-[#3a1030] rounded-xl px-4 py-3 flex items-center justify-between">
-                    <div>
-                      <p className="text-[#f0b0d0] font-black text-sm">{fmtFecha(s.fecha)+" · "+(s.tipo==="tacto"?"Tacto":s.tipo==="servicio"?"Servicio":"Partos")}</p>
-                      <p className="text-[#8a4060] text-xs">{s.registros.length+" animales"}</p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[#c070a0] text-xl">›</span>
-                      <button onClick={function(e){e.stopPropagation();ask("¿Eliminar sesión?",function(){onUpdate(null,null,s.id);});}} className="text-red-500 text-lg">✕</button>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-          {confirmDialog}
-        </div>
-      </Modal>
-    );
-  }
-
-  // ── MANGA REPRO ──
-  if(modo==="manga"){
-    var yaReg=encontrada&&encontrada!=="notfound"&&log.find(function(r){return r.caravana===encontrada.caravana;});
-    var tipoLabel=sesionActual.tipo==="tacto"?"Tacto":sesionActual.tipo==="servicio"?"Servicio":"Partos";
-    return(
-      <div className="fixed inset-0 z-50 flex flex-col" style={{background:"#ffffff"}}>
-        <div className="bg-[#0a1607] border-b border-[#1a2e10] px-4 py-3 shrink-0">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-[10px] text-[#4a6a28] uppercase tracking-widest font-bold">{"Manga "+tipoLabel+" · "+lote.nombre}</p>
-              <h2 className="text-lg font-bold text-[#c8e6a0]">{"Sesión "+fmtFecha(sesionActual.fecha)}</h2>
-            </div>
-            <div className="flex gap-2">
-              <button onClick={function(){setModo("menu");}} className="bg-[#1a2e10] border border-[#2a4a18] text-[#8ac040] font-bold px-3 py-1.5 rounded-xl text-xs">⏸ Pausar</button>
-              <button onClick={finalizar} style={{boxShadow:"0 3px 0 #000"}} className="btn-flash bg-[#c04080] active:translate-y-1 active:shadow-none text-[#0a0000] font-black px-4 py-1.5 rounded-xl text-sm border-2 border-[#e060a0]">FIN</button>
-            </div>
-          </div>
-        </div>
-        {log.length>0&&(
-          <div className="bg-[#0a1f07] border-b border-[#1a3010] px-4 py-2 shrink-0 flex gap-4">
-            <div className="flex items-center gap-1.5"><span className="text-[10px] text-[#4a6a28] uppercase">Registradas:</span><span className="text-gray-800 font-bold text-sm">{log.length}</span></div>
-            {sesionActual.tipo==="tacto"&&<div className="flex items-center gap-1.5"><span className="text-[10px] text-[#4a6a28] uppercase">Preñadas:</span><span className="text-green-300 font-bold text-sm">{log.filter(function(r){return r.resultado==="Preñada";}).length}</span></div>}
-            {sesionActual.tipo==="parto"&&<div className="flex items-center gap-1.5"><span className="text-[10px] text-[#4a6a28] uppercase">Vivos:</span><span className="text-green-300 font-bold text-sm">{log.filter(function(r){return r.vivo;}).length}</span></div>}
-          </div>
-        )}
-        <div className="flex-1 overflow-y-auto flex flex-col">
-          <div className="px-4 pt-4 pb-3">
-            {/* Servicio panel */}
-            {sesionActual.tipo==="servicio"&&(
-              <div className="mb-3 bg-[#0a1f07] border border-[#2a5010] rounded-xl p-3 flex flex-col gap-2">
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="flex flex-col gap-1">
-                    <label className="text-[10px] text-[#4a6a28] uppercase font-bold">Fecha servicio</label>
-                    <input type="date" value={form.fechaServicio} onChange={function(e){setF("fechaServicio",e.target.value);}} className="bg-[#0a1207] border border-[#1e3010] rounded-xl px-2 py-2 text-[#dff0b0] text-sm focus:outline-none"/>
-                  </div>
-                  <div className="bg-[#0a1207] border border-[#1e3010] rounded-xl px-3 py-2 flex flex-col justify-center">
-                    <p className="text-[10px] text-[#4a6a28] uppercase font-bold">Parto estimado</p>
-                    <p className="text-[#a0d060] font-black text-sm">{form.fechaServicio?fmtFecha(sumarDias(form.fechaServicio,283)):"—"}</p>
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="flex flex-col gap-1">
-                    <label className="text-[10px] text-[#4a6a28] uppercase font-bold">Tipo</label>
-                    <select value={form.tipo} onChange={function(e){setF("tipo",e.target.value);}} className="bg-[#0a1207] border border-[#1e3010] rounded-xl px-2 py-2 text-[#dff0b0] text-sm focus:outline-none">
-                      <option>Natural</option><option>I.A.</option><option>E.T.</option>
-                    </select>
-                  </div>
-                  <div className="flex flex-col gap-1">
-                    <label className="text-[10px] text-[#4a6a28] uppercase font-bold">Toro</label>
-                    <select value={form.toro} onChange={function(e){setF("toro",e.target.value);}} className="bg-[#0a1207] border border-[#1e3010] rounded-xl px-2 py-2 text-[#dff0b0] text-sm focus:outline-none">
-                      <option value="">— Elegir —</option>
-                      {(toros||[]).map(function(t){return <option key={t.id} value={t.caravana}>{t.caravana+(t.raza?" · "+t.raza:"")}</option>;})}
-                      <option value="__otro">✏️ Otro</option>
-                    </select>
-                  </div>
-                </div>
-                <button onClick={rodeoCompleto} style={{boxShadow:"0 3px 0 #000"}} className="w-full bg-[#2a6a10] active:translate-y-1 active:shadow-none text-[#dff0b0] font-black py-2.5 rounded-xl text-sm border-2 border-[#4aaa18]">
-                  {"🐄 Rodeo completo ("+hembras.filter(function(h){return !log.find(function(r){return r.caravana===h.caravana;});}).length+" hembras)"}
-                </button>
-              </div>
-            )}
-            <label className="text-[10px] text-[#5a7a30] font-bold uppercase tracking-wider block mb-2">📡 Caravana</label>
-            <input ref={busqRef} value={busq}
-              onChange={function(e){setBusq(e.target.value);buscar(e.target.value);}}
-              onKeyDown={function(e){if(e.key==="Enter"){if(encontrada&&encontrada!=="notfound"&&!yaReg)registrar();else buscar(busq);}}}
-              placeholder="N° caravana..." autoComplete="off" autoCorrect="off" autoCapitalize="characters" spellCheck="false"
-              className="w-full bg-[#0a1207] border-2 border-[#1e3010] focus:border-[#c04080] rounded-2xl px-4 py-4 text-[#dff0b0] text-2xl font-bold tracking-widest focus:outline-none placeholder-[#1e3010]"/>
-            {encontrada&&encontrada!=="notfound"&&(
-              <div className={"mt-3 rounded-2xl p-3 border "+(yaReg?"bg-amber-950/30 border-amber-700":"bg-[#0a1f07] border-[#2a5010]")}>
-                {(encontrada.marcas||[]).length>0&&(
-                  <div className="flex flex-col gap-1 mb-2">
-                    {(encontrada.marcas||[]).map(function(m){
-                      return <div key={m.id} className={"px-3 py-1.5 rounded-xl border font-bold text-sm "+marcaColor(m.color)}>{colorEmoji(m.color)+" "+m.motivo}</div>;
-                    })}
-                  </div>
-                )}
-                <div className="flex items-center justify-between mb-2">
-                  <div>
-                    <p className="text-gray-800 font-black text-base">{encontrada.caravana}</p>
-                    <p className="text-[#5a8a30] text-xs">{encontrada.categoria}</p>
-                    {yaReg&&<p className="text-amber-300 text-xs font-bold">⚠️ Ya registrada</p>}
-                  </div>
-                </div>
-                {!yaReg&&(
-                  <div className="flex flex-col gap-2">
-                    {sesionActual.tipo==="tacto"&&(
-                      <div className="flex gap-2">
-                        {["Preñada","Vacía","Dudosa"].map(function(r){
-                          var active=form.resultado===r;
-                          var cls="flex-1 py-2 rounded-xl text-xs font-bold border "+(active?(r==="Preñada"?"bg-green-800 border-green-600 text-white":r==="Vacía"?"bg-red-800 border-red-600 text-white":"bg-amber-800 border-amber-600 text-white"):"bg-[#0a1207] border-[#1e3010] text-[#5a7a30]");
-                          return <button key={r} onClick={function(){setF("resultado",r);}} className={cls}>{r}</button>;
-                        })}
-                      </div>
-                    )}
-                    {sesionActual.tipo==="parto"&&(
-                      <div className="flex flex-col gap-2">
-                        <div className="flex gap-2">
-                          <button onClick={function(){setF("vivo",true);}} className={"flex-1 py-2 rounded-xl text-xs font-bold border "+(form.vivo?"bg-green-800 border-green-600 text-white":"bg-[#0a1207] border-[#1e3010] text-[#5a7a30]")}>Vivo</button>
-                          <button onClick={function(){setF("vivo",false);}} className={"flex-1 py-2 rounded-xl text-xs font-bold border "+(!form.vivo?"bg-red-800 border-red-600 text-white":"bg-[#0a1207] border-[#1e3010] text-[#5a7a30]")}>Muerto</button>
-                        </div>
-                        {form.vivo&&(
-                          <div className="grid grid-cols-2 gap-2">
-                            <div className="flex flex-col gap-1">
-                              <label className="text-[10px] text-[#4a6a28] uppercase font-bold">Sexo ternero</label>
-                              <select value={form.sexoTernero} onChange={function(e){setF("sexoTernero",e.target.value);}} className="bg-[#0a1207] border border-[#1e3010] rounded-xl px-2 py-2 text-[#dff0b0] text-sm focus:outline-none">
-                                <option>Macho</option><option>Hembra</option>
-                              </select>
-                            </div>
-                            <Inp label="Caravana ternero" placeholder="Opcional" value={form.caravanaTernero} onChange={function(e){setF("caravanaTernero",e.target.value);}}/>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                    <Inp label="Observaciones" placeholder="Opcional" value={form.obs} onChange={function(e){setF("obs",e.target.value);}}/>
-                    <button onClick={registrar} style={{boxShadow:"0 4px 0 #000"}} className="w-full bg-[#c04080] active:translate-y-1 active:shadow-none text-[#0a0000] font-black py-3 rounded-xl text-lg border-2 border-[#e060a0]">✓ REGISTRAR</button>
-                  </div>
-                )}
-              </div>
-            )}
-            {encontrada==="notfound"&&<p className="mt-2 text-amber-400 text-sm font-bold">{"⚠️ "+busq.trim().toUpperCase()+" — no encontrada"}</p>}
-          </div>
-          <div className="px-4 pb-4">
-            <p className="text-[10px] text-[#3a5a20] uppercase tracking-wider font-bold mb-2">{log.length+" registros"}</p>
-            {log.map(function(r,i){
-              return(
-                <div key={r.id} className={"flex items-center justify-between rounded-xl px-3 py-2.5 mb-1.5 border "+(i===0?"bg-[#0a1f07] border-[#c04080]":"bg-[#0a1207] border-[#1a2e10]")}>
-                  <div>
-                    <p className="text-[#dff0b0] font-bold text-base">{r.caravana}</p>
-                    <p className="text-[#5a8a30] text-xs">{r.categoria}</p>
-                  </div>
-                  <div className="text-right">
-                    {r.resultado&&<p className={"text-sm font-bold "+(r.resultado==="Preñada"?"text-green-300":r.resultado==="Vacía"?"text-red-300":"text-amber-300")}>{r.resultado}</p>}
-                    {r.tipo&&<p className="text-[#c070a0] text-sm font-bold">{r.tipo+(r.toro&&r.toro!=="__otro"?" · "+r.toro:"")}</p>}
-                    {r.fechaPartoProbable&&<p className="text-amber-400 text-xs">{"Parto: "+fmtFecha(r.fechaPartoProbable)}</p>}
-                    {r.vivo!==undefined&&<p className={"text-sm font-bold "+(r.vivo?"text-green-300":"text-red-300")}>{r.vivo?"Vivo":"Muerto"}{r.caravanaTernero?" · "+r.caravanaTernero:""}</p>}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // ── RESUMEN SESIÓN ──
-  if(modo==="resumen"){
-    var tipoLbl=sesionActual.tipo==="tacto"?"Tacto":sesionActual.tipo==="servicio"?"Servicio":"Partos";
-    return(
-      <Modal title={"📋 "+tipoLbl+" · "+fmtFecha(sesionActual.fecha)} onClose={function(){if(sesionActual.soloVer){setSesionActual(null);setLog([]);}setModo("menu");}}>
-        <div className="flex flex-col gap-3">
-          <div className="grid grid-cols-2 gap-2">
-            <div className="bg-[#1a0010] border border-[#3a1030] rounded-xl p-3 text-center">
-              <p className="text-2xl font-black text-white">{log.length}</p>
-              <p className="text-[10px] text-[#c070a0] uppercase mt-1">Animales</p>
-            </div>
-            {sesionActual.tipo==="tacto"&&(
-              <div className="bg-[#1a0010] border border-[#3a1030] rounded-xl p-3 text-center">
-                <p className="text-2xl font-black text-green-300">{log.filter(function(r){return r.resultado==="Preñada";}).length}</p>
-                <p className="text-[10px] text-[#c070a0] uppercase mt-1">Preñadas</p>
-              </div>
-            )}
-            {sesionActual.tipo==="parto"&&(
-              <div className="bg-[#1a0010] border border-[#3a1030] rounded-xl p-3 text-center">
-                <p className="text-2xl font-black text-green-300">{log.filter(function(r){return r.vivo;}).length}</p>
-                <p className="text-[10px] text-[#c070a0] uppercase mt-1">Vivos</p>
-              </div>
-            )}
-          </div>
-          <div className="flex flex-col gap-1.5 max-h-64 overflow-y-auto">
-            {log.map(function(r){
-              return(
-                <div key={r.id} className="flex items-center justify-between bg-[#1a0010] border border-[#3a1030] rounded-xl px-3 py-2">
-                  <div>
-                    <p className="text-[#f0b0d0] font-bold text-sm">{r.caravana}</p>
-                    <p className="text-[#8a4060] text-xs">{r.categoria}</p>
-                  </div>
-                  <div className="text-right">
-                    {r.resultado&&<p className={"text-sm font-bold "+(r.resultado==="Preñada"?"text-green-300":r.resultado==="Vacía"?"text-red-300":"text-amber-300")}>{r.resultado}</p>}
-                    {r.tipo&&<p className="text-[#c070a0] text-sm">{r.tipo+(r.toro&&r.toro!=="__otro"?" · "+r.toro:"")}</p>}
-                    {r.fechaPartoProbable&&<p className="text-amber-400 text-xs">{"🐄 Parto est.: "+fmtFecha(r.fechaPartoProbable)}</p>}
-                    {r.vivo!==undefined&&<p className={"text-sm font-bold "+(r.vivo?"text-green-300":"text-red-300")}>{r.vivo?"Vivo":"Muerto"}</p>}
-                    {r.obs&&<p className="text-[#8a4060] text-xs">{r.obs}</p>}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </Modal>
-    );
-  }
-  return null;
-}
-
-// ── Toros Modal ───────────────────────────────────────────────────────────────
-function TorosModal({est,onClose,onUpdate}){
-  var [ask,confirmDialog]=useConfirm();
-  var [form,setForm]=useState({caravana:"",raza:"",obs:""});
-  var toros=est.toros||[];
-  function setF(k,v){setForm(function(p){return Object.assign({},p,{[k]:v});});}
-  function guardar(){
-    if(!form.caravana.trim())return;
-    onUpdate([...toros,{id:Date.now(),caravana:form.caravana.trim().toUpperCase(),raza:form.raza,obs:form.obs}]);
-    setForm({caravana:"",raza:"",obs:""});
-  }
-  return(
-    <Modal title="🐂 Toros" onClose={onClose}>
-      <div className="flex flex-col gap-3">
-        <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 flex flex-col gap-2">
-          <p className="text-xs font-black text-green-600 uppercase">+ Nuevo toro</p>
-          <div className="grid grid-cols-2 gap-2">
-            <Inp label="Caravana" placeholder="N° caravana" value={form.caravana} onChange={function(e){setF("caravana",e.target.value);}}/>
-            <Sel label="Raza" options={RAZAS} value={form.raza} onChange={function(e){setF("raza",e.target.value);}}/>
-          </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-[10px] text-green-600 font-bold uppercase">Observaciones</label>
-            <textarea rows={2} value={form.obs} onChange={function(e){setF("obs",e.target.value);}} placeholder="Características..."
-              className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-gray-800 text-sm focus:outline-none focus:border-green-400 resize-none"/>
-          </div>
-          <button onClick={guardar} style={{boxShadow:"0 3px 0 #000"}} className="w-full bg-[#4a8a18] active:translate-y-1 active:shadow-none text-[#dff0b0] font-bold py-2.5 rounded-xl text-sm border-2 border-[#6aca28]">Guardar Toro</button>
-        </div>
-        {toros.length===0&&<div className="text-center py-8 text-[#3a5a20]"><p className="text-4xl mb-2">🐂</p><p className="text-sm">Sin toros</p></div>}
-        {toros.map(function(t){
-          return(
-            <div key={t.id} className="bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 flex items-start justify-between">
-              <div>
-                <p className="text-gray-800 font-black text-base">{t.caravana}</p>
-                {t.raza&&<p className="text-green-600 text-xs">{t.raza}</p>}
-                {t.obs&&<p className="text-[#c8e6a0] text-sm mt-0.5">{t.obs}</p>}
-              </div>
-              <button onClick={function(){ask("¿Eliminar toro?",function(){onUpdate(toros.filter(function(x){return x.id!==t.id;}));});}} className="text-red-500 text-lg ml-2">✕</button>
-            </div>
-          );
-        })}
-        {confirmDialog}
-      </div>
-    </Modal>
-  );
-}
-
-// ── Cuaderno Modal ────────────────────────────────────────────────────────────
-function CuadernoModal({notas,onClose,onSave}){
-  var [texto,setTexto]=useState(notas||"");
-  return(
-    <Modal title="📓 Anotaciones" onClose={onClose}>
-      <div className="flex flex-col gap-3">
-        <textarea rows={12} value={texto} onChange={function(e){setTexto(e.target.value);}}
-          placeholder="Anotá lo que necesites: actividades, observaciones, recordatorios..."
-          className="w-full bg-[#0a1207] border border-[#1e3010] rounded-xl px-3 py-3 text-[#dff0b0] text-sm focus:outline-none resize-none placeholder-[#2a4018]"/>
-        <button onClick={function(){onSave(texto);onClose();}} style={{boxShadow:"0 4px 0 #000"}} className="w-full bg-[#5aaa22] active:translate-y-1 active:shadow-none text-[#0a2000] font-black py-3 rounded-xl border-2 border-[#7ada3a]">Guardar</button>
-      </div>
-    </Modal>
-  );
-}
-
-// ── Alertas Modal ─────────────────────────────────────────────────────────────
-function AlertasModal({alertas,onClose,onSave,nombreEst,lotes}){
-  var [ask,confirmDialog]=useConfirm();
-  var [form,setForm]=useState({titulo:"",tipo:"",fechaHora:"",loteId:"",obs:""});
-  var [showForm,setShowForm]=useState(false);
-  function setF(k,v){setForm(function(p){return Object.assign({},p,{[k]:v});});}
-  function guardar(){
-    if(!form.titulo||!form.fechaHora)return;
-    onSave([...alertas,{id:Date.now(),...form,pasada:false}]);
-    setForm({titulo:"",tipo:"",fechaHora:"",loteId:"",obs:""});
-    setShowForm(false);
-  }
-  function colorEst(estado){
-    if(estado==="pasada")return "bg-gray-700 border-gray-500 text-gray-300";
-    if(estado==="urgente")return "bg-red-900 border-red-600 text-red-200";
-    if(estado==="pronto")return "bg-amber-900 border-amber-600 text-amber-200";
-    return "bg-[#1a3a10] border-[#2a5a18] text-[#a0d060]";
-  }
-  var sorted=[...alertas].sort(function(a,b){return new Date(a.fechaHora)-new Date(b.fechaHora);});
-  return(
-    <Modal title={"🔔 Alertas · "+nombreEst} onClose={onClose}>
-      <div className="flex flex-col gap-3">
-        {!showForm?(
-          <button onClick={function(){setShowForm(true);}} style={{boxShadow:"0 3px 0 #000"}} className="w-full bg-[#5aaa22] active:translate-y-1 active:shadow-none text-[#0a2000] font-bold py-2.5 rounded-xl border-2 border-[#7ada3a]">+ Nueva alerta</button>
-        ):(
-          <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 flex flex-col gap-2">
-            <Inp label="Título *" value={form.titulo} onChange={function(e){setF("titulo",e.target.value);}} placeholder="Ej: Vacunar terneros"/>
-            <div className="grid grid-cols-2 gap-2">
-              <Sel label="Tipo" options={TIPOS_ALERTA} value={form.tipo} onChange={function(e){setF("tipo",e.target.value);}}/>
-              <div className="flex flex-col gap-1">
-                <label className="text-[10px] text-green-600 font-bold uppercase">Lote (opcional)</label>
-                <select value={form.loteId} onChange={function(e){setF("loteId",e.target.value);}} className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-gray-800 text-sm focus:outline-none focus:border-green-400">
-                  <option value="">— General —</option>
-                  {(lotes||[]).map(function(l){return <option key={l.id} value={l.id}>{l.nombre}</option>;})}
-                </select>
-              </div>
-            </div>
-            <Inp label="Fecha y hora *" type="datetime-local" value={form.fechaHora} onChange={function(e){setF("fechaHora",e.target.value);}}/>
-            <div className="flex flex-col gap-1">
-              <label className="text-[10px] text-green-600 font-bold uppercase">Observaciones</label>
-              <textarea rows={2} value={form.obs} onChange={function(e){setF("obs",e.target.value);}}
-                className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-gray-800 text-sm focus:outline-none focus:border-green-400 resize-none"/>
-            </div>
-            <div className="flex gap-2">
-              <button onClick={function(){setShowForm(false);}} className="flex-1 py-2 rounded-xl border border-[#2a4a18] text-[#5a8a30] text-sm">Cancelar</button>
-              <button onClick={guardar} className="flex-1 py-2 rounded-xl bg-[#4a8a18] text-[#dff0b0] font-bold text-sm border border-[#6aca28]">Guardar</button>
-            </div>
-          </div>
-        )}
-        {sorted.length===0&&<p className="text-gray-400 text-center py-6">Sin alertas</p>}
-        {sorted.map(function(a){
-          var est=estadoAlerta(a.fechaHora,a.pasada);
-          var loteNombre=a.loteId?(lotes||[]).find(function(l){return l.id===parseInt(a.loteId);})||null:null;
-          return(
-            <div key={a.id} className={"rounded-xl px-4 py-3 border "+colorEst(est)}>
-              <div className="flex items-start justify-between">
-                <div className="flex-1">
-                  <p className="font-bold text-base">{a.titulo}</p>
-                  {a.tipo&&<p className="text-xs opacity-70">{a.tipo}</p>}
-                  <p className="text-xs opacity-70 mt-0.5">{new Date(a.fechaHora).toLocaleString("es-AR")}</p>
-                  {loteNombre&&<p className="text-xs opacity-70">{"Lote: "+loteNombre.nombre}</p>}
-                  {a.obs&&<p className="text-xs mt-1 opacity-80">{a.obs}</p>}
-                </div>
-                <div className="flex flex-col gap-1 ml-2">
-                  {!a.pasada&&<button onClick={function(){onSave(alertas.map(function(x){return x.id===a.id?Object.assign({},x,{pasada:true}):x;}));}} className="text-xs opacity-60 hover:opacity-100">✓</button>}
-                  <button onClick={function(){ask("¿Eliminar alerta?",function(){onSave(alertas.filter(function(x){return x.id!==a.id;}));});}} className="text-red-400 text-lg">✕</button>
-                </div>
-              </div>
-            </div>
-          );
-        })}
-        {confirmDialog}
-      </div>
-    </Modal>
-  );
-}
-
-// ── Agro Vista Lote ───────────────────────────────────────────────────────────
-function AgroVistaLote({agro,onUpdate,loteNombre}){
-  var [tab,setTab]=useState("potreros");
-  var [potreroActivo,setPotreroActivo]=useState(null);
-  var [busqPot,setBusqPot]=useState("");
-  var [mostrarNuevo,setMostrarNuevo]=useState(false);
-  var [formPot,setFormPot]=useState({nombre:"",hectareas:"",desc:""});
-  var [formAct,setFormAct]=useState({fecha:hoy(),actividad:"",cultivo:"",obs:"",kgCosecha:"",potrero:""});
-  var [formGasto,setFormGasto]=useState({fecha:hoy(),concepto:"",monto:"",potrero:""});
-  var [ask,confirmDialog]=useConfirm();
-  var setPot=function(k,v){setFormPot(function(p){return Object.assign({},p,{[k]:v});});};
-  var setA=function(k,v){setFormAct(function(p){return Object.assign({},p,{[k]:v});});};
-  var setG=function(k,v){setFormGasto(function(p){return Object.assign({},p,{[k]:v});});};
-  var potreros=agro.potreros||[];
-  var registros=agro.registros||[];
-  var gastos=agro.gastos||[];
-
-  function guardarPotrero(){
-    if(!formPot.nombre.trim())return;
-    onUpdate(Object.assign({},agro,{potreros:[...potreros,{id:Date.now(),nombre:formPot.nombre.trim(),hectareas:parseFloat(formPot.hectareas)||0,desc:formPot.desc}]}));
-    setFormPot({nombre:"",hectareas:"",desc:""});setMostrarNuevo(false);
-  }
-
-  function tabBtn(t,label){
-    return(
-      <button key={t} onClick={function(){setTab(t);}
-      } className={"px-3 py-2 rounded-xl text-xs font-black border-2 "+(tab===t?"bg-[#4a4a00] border-[#8a8a00] text-[#d4d000]":"bg-[#0a0a00] border-[#2a2a00] text-[#6a6a30]")}>
-        {label}
-      </button>
-    );
-  }
-
-  return(
-    <div className="flex flex-col gap-4">
-      <div className="flex gap-1 flex-wrap">
-        {tabBtn("potreros","🗺️ Potreros")}
-        {tabBtn("actividad","📋 Actividades")}
-        {tabBtn("gastos","💰 Gastos")}
-      </div>
-
-      {tab==="potreros"&&(
-        <div className="flex flex-col gap-3">
-          {!potreroActivo&&(
-            <div className="flex flex-col gap-3">
-              <input value={busqPot} onChange={function(e){setBusqPot(e.target.value);}} placeholder="🔍 Buscar potrero..."
-                className="bg-[#162208] border border-[#2a4a18] rounded-xl px-3 py-2.5 text-[#dff0b0] text-sm focus:outline-none w-full"/>
-              {mostrarNuevo?(
-                <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 flex flex-col gap-3">
-                  <Inp label="Nombre" placeholder="Ej: Potrero Norte" value={formPot.nombre} onChange={function(e){setPot("nombre",e.target.value);}}/>
-                  <Inp label="Hectáreas" type="number" placeholder="0" value={formPot.hectareas} onChange={function(e){setPot("hectareas",e.target.value);}}/>
-                  <div className="flex gap-2">
-                    <button onClick={function(){setMostrarNuevo(false);}} className="flex-1 py-2 rounded-xl border border-[#2a4a18] text-[#7aaa40] text-sm">Cancelar</button>
-                    <button onClick={guardarPotrero} className="flex-1 py-2 rounded-xl bg-[#4a4a00] text-[#d4d060] font-bold text-sm border border-[#8a8a00]">Guardar</button>
-                  </div>
+          {encontrado&&(
+            <div className="flex flex-col gap-2">
+              <input ref={pesoRef} type="number" inputMode="decimal" value={peso} onChange={e=>setPeso(e.target.value)} onKeyDown={e=>e.key==="Enter"&&registrar()}
+                placeholder="Peso en kg"
+                className="w-full bg-[#0a1207] border-2 border-[#1e3010] focus:border-[#5a9a10] rounded-2xl px-4 py-4 text-[#dff0b0] text-3xl font-bold focus:outline-none placeholder-[#1e3010] transition-colors text-center"/>
+              {yaRegistrado?(
+                <div className="w-full bg-red-950/60 border-2 border-red-800 rounded-2xl py-4 flex items-center justify-center gap-3">
+                  <span className="text-red-400 text-xl">⚠</span>
+                  <div className="text-center"><p className="text-red-300 font-black text-sm">ANIMAL YA PESADO EN ESTA SESIÓN</p></div>
                 </div>
               ):(
-                <button onClick={function(){setMostrarNuevo(true);}} style={{boxShadow:"0 3px 0 #000"}} className="w-full bg-[#4a4a00] active:translate-y-1 active:shadow-none text-[#d4d060] font-bold py-2.5 rounded-xl text-sm border-2 border-[#8a8a00]">＋ Nuevo Potrero</button>
+                <button onClick={registrar} className="w-full bg-[#3d7a10] hover:bg-[#4d9a18] active:scale-95 text-white rounded-2xl py-5 text-2xl font-black transition-all shadow-lg">ENTER</button>
               )}
-              {potreros.filter(function(p){return p.nombre.toLowerCase().includes(busqPot.toLowerCase());}).map(function(p){
-                var acts=registros.filter(function(r){return r.potrero===p.nombre;});
-                return(
-                  <button key={p.id} onClick={function(){setPotreroActivo(p);}} className="w-full text-left bg-[#1a1a00] border border-[#3a3a00] rounded-xl px-4 py-3">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-[#d4d060] font-black text-base">{p.nombre}</p>
-                        <div className="flex gap-3 mt-1">
-                          {p.hectareas>0&&<span className="text-[10px] text-[#8a8a40] font-bold">{p.hectareas+" ha"}</span>}
-                          <span className="text-[10px] text-[#5a5a30]">{acts.length+" actividades"}</span>
-                        </div>
-                      </div>
-                      <span className="text-[#6a6a30] text-xl">›</span>
-                    </div>
-                  </button>
-                );
-              })}
-              {potreros.length===0&&!mostrarNuevo&&<div className="text-center py-8 text-[#4a4a20]"><p className="text-4xl mb-2">🗺️</p><p className="text-sm">Sin potreros</p></div>}
             </div>
           )}
-          {potreroActivo&&(
-            <div className="flex flex-col gap-3">
+        </div>
+        <div className="px-4 py-2 flex items-center gap-3 shrink-0">
+          <div className="flex-1 h-px bg-[#1a2e10]"/>
+          <span className="text-[10px] text-[#3a5a20] uppercase tracking-wider font-bold">{log.length} pesajes</span>
+          <div className="flex-1 h-px bg-[#1a2e10]"/>
+        </div>
+        <div className="px-4 pb-4 flex flex-col gap-2">
+          {log.length===0&&<div className="text-center py-10 text-[#2a4018]"><p className="text-4xl mb-2">⚖️</p><p className="text-sm">Los pesajes aparecen aquí</p></div>}
+          {log.map((l,i)=>(
+            <div key={l.id} className={`flex items-center justify-between bg-[#0a1207] border rounded-xl px-4 py-3 ${i===0?"border-green-800/70 bg-green-950/20":"border-[#1a2e10]"}`}>
               <div className="flex items-center gap-2">
-                <button onClick={function(){setPotreroActivo(null);}} className="text-[#d4d060] text-sm font-bold">← Volver</button>
-                <h3 className="text-[#d4d060] font-black text-lg flex-1">{potreroActivo.nombre}</h3>
-                <button onClick={function(){ask("¿Eliminar potrero?",function(){onUpdate(Object.assign({},agro,{potreros:potreros.filter(function(x){return x.id!==potreroActivo.id;})}));setPotreroActivo(null);});}} className="text-red-500 text-xs border border-red-800 px-2 py-1 rounded-lg">🗑</button>
+                {i===0&&<span className="text-[10px] text-green-500 font-bold uppercase">último</span>}
+                <div><p className="text-[#dff0b0] font-bold text-sm">{l.caravana}</p><div className="flex gap-1 mt-0.5"><Badge text={l.sexo} color={l.sexo==="Macho"?"macho":"hembra"}/><Badge text={l.categoria}/></div></div>
               </div>
-              {potreroActivo.hectareas>0&&<p className="text-[#8a8a40] text-sm">{potreroActivo.hectareas+" ha"}</p>}
-              <div className="bg-[#0d0d00] border border-[#2a2a00] rounded-xl p-3 flex flex-col gap-2">
-                <p className="text-xs font-black text-[#d4d060] uppercase">+ Actividad</p>
-                <Sel label="Actividad" options={ACTIVIDADES_AGRO} value={formAct.actividad} onChange={function(e){setA("actividad",e.target.value);}}/>
-                <Sel label="Cultivo (opcional)" options={CULTIVOS} value={formAct.cultivo} onChange={function(e){setA("cultivo",e.target.value);}}/>
-                <div className="grid grid-cols-2 gap-2">
-                  <Inp label="Fecha" type="date" value={formAct.fecha} onChange={function(e){setA("fecha",e.target.value);}}/>
-                  <Inp label="Kg cosechados" type="number" placeholder="Solo cosecha" value={formAct.kgCosecha} onChange={function(e){setA("kgCosecha",e.target.value);}}/>
-                </div>
-                <div className="flex flex-col gap-1">
-                  <label className="text-[10px] text-green-600 font-bold uppercase">Obs.</label>
-                  <textarea rows={2} value={formAct.obs} onChange={function(e){setA("obs",e.target.value);}}
-                    className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-gray-800 text-sm focus:outline-none focus:border-green-400 resize-none"/>
-                </div>
-                <button onClick={function(){
-                  if(!formAct.actividad)return;
-                  onUpdate(Object.assign({},agro,{registros:[...registros,{id:Date.now(),fecha:formAct.fecha,actividad:formAct.actividad,cultivo:formAct.cultivo,potrero:potreroActivo.nombre,obs:formAct.obs,kgCosecha:formAct.kgCosecha?parseFloat(formAct.kgCosecha):null}]}));
-                  setA("actividad","");setA("cultivo","");setA("obs","");setA("kgCosecha","");
-                }} className="w-full bg-[#4a4a00] text-[#d4d060] font-bold py-2 rounded-xl text-sm border border-[#8a8a00]">Guardar</button>
+              <div className="text-right">
+                <p className="text-[#a0d060] font-bold text-xl">{l.peso} kg</p>
+                {l.gdpAnimal!==null&&<p className={`text-xs font-semibold ${l.gdpAnimal>=0?"text-green-400":"text-red-400"}`}>{l.gdpAnimal.toFixed(3)} kg/d</p>}
               </div>
-              {registros.filter(function(r){return r.potrero===potreroActivo.nombre;}).length===0&&<p className="text-gray-400 text-sm text-center py-4">Sin actividades</p>}
-              {[...registros].filter(function(r){return r.potrero===potreroActivo.nombre;}).sort(function(a,b){return b.fecha.localeCompare(a.fecha);}).map(function(r){
-                return(
-                  <div key={r.id} className="bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 flex items-start justify-between">
-                    <div className="flex-1">
-                      <p className="text-sm font-black text-[#d4d060]">{r.actividad}</p>
-                      {r.cultivo&&<span className="text-[10px] bg-[#2a2a00] text-[#c0c040] border border-[#4a4a00] px-2 py-0.5 rounded-full">{r.cultivo}</span>}
-                      <p className="text-green-600 text-xs">{fmtFecha(r.fecha)}</p>
-                      {r.kgCosecha&&<p className="text-[#d4d060] text-sm font-bold">{"🌾 "+r.kgCosecha.toLocaleString("es-AR")+" kg"+(potreroActivo.hectareas>0?" · "+(r.kgCosecha/potreroActivo.hectareas).toFixed(0)+" kg/ha":"")}</p>}
-                      {r.obs&&<p className="text-[#c8e6a0] text-sm mt-1">{r.obs}</p>}
-                    </div>
-                    <button onClick={function(){ask("¿Eliminar?",function(){onUpdate(Object.assign({},agro,{registros:registros.filter(function(x){return x.id!==r.id;})}));});}} className="text-red-500 text-lg ml-2">✕</button>
-                  </div>
-                );
-              })}
             </div>
-          )}
+          ))}
         </div>
-      )}
-
-      {tab==="actividad"&&(
-        <div className="flex flex-col gap-3">
-          <Sel label="Actividad" options={ACTIVIDADES_AGRO} value={formAct.actividad} onChange={function(e){setA("actividad",e.target.value);}}/>
-          <div className="grid grid-cols-2 gap-3">
-            <Inp label="Fecha" type="date" value={formAct.fecha} onChange={function(e){setA("fecha",e.target.value);}}/>
-            <div className="flex flex-col gap-1">
-              <label className="text-[10px] text-green-600 font-bold uppercase">Potrero</label>
-              <select value={formAct.potrero} onChange={function(e){setA("potrero",e.target.value);}} className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-gray-800 text-sm focus:outline-none focus:border-green-400">
-                <option value="">— General —</option>
-                {potreros.map(function(p){return <option key={p.id} value={p.nombre}>{p.nombre}</option>;})}
-              </select>
-            </div>
-          </div>
-          <Sel label="Cultivo (opcional)" options={CULTIVOS} value={formAct.cultivo} onChange={function(e){setA("cultivo",e.target.value);}}/>
-          <div className="flex flex-col gap-1">
-            <label className="text-[10px] text-green-600 font-bold uppercase">Observaciones</label>
-            <textarea rows={2} value={formAct.obs} onChange={function(e){setA("obs",e.target.value);}}
-              className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-gray-800 text-sm focus:outline-none focus:border-green-400 resize-none"/>
-          </div>
-          <button onClick={function(){
-            if(!formAct.actividad)return;
-            onUpdate(Object.assign({},agro,{registros:[...registros,{id:Date.now(),fecha:formAct.fecha,actividad:formAct.actividad,cultivo:formAct.cultivo,potrero:formAct.potrero,obs:formAct.obs}]}));
-            setA("actividad","");setA("obs","");setA("potrero","");setA("cultivo","");
-          }} className="w-full bg-[#4a4a00] text-[#d4d060] font-bold py-3 rounded-xl text-sm border border-[#8a8a00]">Guardar Actividad</button>
-          <div className="flex flex-col gap-2 border-t border-gray-100 pt-3">
-            {registros.length===0&&<p className="text-gray-400 text-sm text-center py-4">Sin actividades</p>}
-            {[...registros].sort(function(a,b){return b.fecha.localeCompare(a.fecha);}).map(function(r){
-              return(
-                <div key={r.id} className="bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 flex items-start justify-between">
-                  <div className="flex-1">
-                    <p className="text-sm font-black text-[#d4d060]">{r.actividad}</p>
-                    <div className="flex gap-1 flex-wrap mt-1">
-                      {r.cultivo&&<span className="text-[10px] bg-[#2a2a00] text-[#c0c040] border border-[#4a4a00] px-2 py-0.5 rounded-full">{r.cultivo}</span>}
-                      {r.potrero&&<span className="text-[10px] bg-[#1a3a10] text-[#7aaa40] border border-[#2a5018] px-2 py-0.5 rounded-full">{r.potrero}</span>}
-                    </div>
-                    <p className="text-[#7aaa40] text-xs mt-1">{fmtFecha(r.fecha)}</p>
-                    {r.obs&&<p className="text-[#c8e6a0] text-sm mt-1">{r.obs}</p>}
-                  </div>
-                  <button onClick={function(){ask("¿Eliminar?",function(){onUpdate(Object.assign({},agro,{registros:registros.filter(function(x){return x.id!==r.id;})}));});}} className="text-red-500 text-lg ml-2">✕</button>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {tab==="gastos"&&(
-        <div className="flex flex-col gap-3">
-          <div className="bg-[#1a1a00] border border-[#3a3a00] rounded-xl p-3 text-center">
-            <p className="text-[10px] text-[#8a8a40] uppercase font-bold">Total gastos</p>
-            <p className="text-2xl font-black text-[#d4d060]">{"$"+gastos.reduce(function(s,g){return s+g.monto;},0).toLocaleString("es-AR")}</p>
-          </div>
-          <Inp label="Concepto" placeholder="Ej: Herbicida, Gasoil..." value={formGasto.concepto} onChange={function(e){setG("concepto",e.target.value);}}/>
-          <div className="grid grid-cols-2 gap-3">
-            <Inp label="Monto ($)" type="number" placeholder="0" value={formGasto.monto} onChange={function(e){setG("monto",e.target.value);}}/>
-            <Inp label="Fecha" type="date" value={formGasto.fecha} onChange={function(e){setG("fecha",e.target.value);}}/>
-          </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-[10px] text-green-600 font-bold uppercase">Potrero</label>
-            <select value={formGasto.potrero} onChange={function(e){setG("potrero",e.target.value);}} className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-gray-800 text-sm focus:outline-none focus:border-green-400">
-              <option value="">— General —</option>
-              {potreros.map(function(p){return <option key={p.id} value={p.nombre}>{p.nombre}</option>;})}
-            </select>
-          </div>
-          <button onClick={function(){
-            if(!formGasto.concepto||!formGasto.monto)return;
-            onUpdate(Object.assign({},agro,{gastos:[...gastos,{id:Date.now(),concepto:formGasto.concepto,monto:parseFloat(formGasto.monto),fecha:formGasto.fecha,potrero:formGasto.potrero}]}));
-            setFormGasto({fecha:hoy(),concepto:"",monto:"",potrero:""});
-          }} className="w-full bg-[#4a4a00] text-[#d4d060] font-bold py-3 rounded-xl text-sm border border-[#8a8a00]">Guardar Gasto</button>
-          <div className="flex flex-col gap-2 border-t border-gray-100 pt-3">
-            {gastos.length===0&&<p className="text-gray-400 text-sm text-center py-4">Sin gastos</p>}
-            {[...gastos].sort(function(a,b){return b.fecha.localeCompare(a.fecha);}).map(function(g){
-              return(
-                <div key={g.id} className="bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 flex items-center justify-between">
-                  <div>
-                    <p className="text-[#d4d060] font-bold text-sm">{g.concepto}</p>
-                    <p className="text-green-600 text-xs">{fmtFecha(g.fecha)+(g.potrero?" · "+g.potrero:"")}</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <p className="text-white font-black">{"$"+g.monto.toLocaleString("es-AR")}</p>
-                    <button onClick={function(){ask("¿Eliminar?",function(){onUpdate(Object.assign({},agro,{gastos:gastos.filter(function(x){return x.id!==g.id;})}));});}} className="text-red-500 text-lg">✕</button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-      {confirmDialog}
-    </div>
-  );
-}
-
-// ── Marca Masiva Form ─────────────────────────────────────────────────────────
-function MarcaMasivaForm({count,onConfirm,onClose}){
-  var [color,setColor]=useState("rojo");
-  var [motivo,setMotivo]=useState("");
-  var [custom,setCustom]=useState("");
-  return(
-    <div className="flex flex-col gap-3">
-      <p className="text-sm text-[#3a5a20]">{"Se marcará"+(count>1?"n":"")+" "+count+" animal"+(count>1?"es":"")+" con:"}</p>
-      <div className="flex gap-1">
-        {[["rojo","🔴"],["amarillo","🟡"],["verde","🟢"],["azul","🔵"]].map(function(c){
-          var active=color===c[0];
-          return(
-            <button key={c[0]} onClick={function(){setColor(c[0]);}}
-              className={"flex-1 py-2 rounded-xl text-lg font-bold border "+(active?marcaColor(c[0]):"bg-[#0a1207] border-[#1e3010] text-[#3a5a20]")}>
-              {c[1]}
-            </button>
-          );
-        })}
       </div>
-      <select value={motivo} onChange={function(e){setMotivo(e.target.value);}} className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-gray-800 text-sm focus:outline-none focus:border-green-400">
-        <option value="">— Motivo —</option>
-        {MARCAS_MOTIVOS.map(function(m){return <option key={m} value={m}>{m}</option>;})}
-        <option value="__otro">✏️ Otro</option>
-      </select>
-      {motivo==="__otro"&&<input value={custom} onChange={function(e){setCustom(e.target.value);}} placeholder="Escribí el motivo..." autoFocus className="bg-[#162208] border border-[#2a4a18] rounded-xl px-3 py-2 text-[#dff0b0] text-sm focus:outline-none"/>}
-      <button onClick={function(){
-        var m=motivo==="__otro"?custom.trim():motivo;
-        if(!m)return;
-        onConfirm(color,m);
-      }} style={{boxShadow:"0 4px 0 #000"}} className="w-full bg-[#5aaa22] active:translate-y-1 active:shadow-none text-[#0a2000] font-black py-3 rounded-xl border-2 border-[#7ada3a]">
-        {"🏷️ Marcar "+count+" animal"+(count>1?"es":"")}
-      </button>
     </div>
-  );
+  )
 }
-
 
 // ── Vista Lote ────────────────────────────────────────────────────────────────
-function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablecimientos,estId}){
-  var lote=allLotes.find(function(l){return l.id===loteId;});
-  var [vista,setVista]=useState("rodeo");
-  var [showNuevo,setShowNuevo]=useState(false);
-  var [detalleId,setDetalleId]=useState(null);
-  var [busq,setBusq]=useState("");
-  var [filtroCateg,setFiltroCateg]=useState("");
-  var [filtroSexo,setFiltroSexo]=useState("");
-  var [filtroPesoMin,setFiltroPesoMin]=useState("");
-  var [filtroPesoMax,setFiltroPesoMax]=useState("");
-  var [filtrosVisible,setFiltrosVisible]=useState(false);
-  var [showMarcaMasiva,setShowMarcaMasiva]=useState(false);
-  var [resumenSesion,setResumenSesion]=useState(null);
-  var [showHistorial,setShowHistorial]=useState(false);
-  var [showRenombrar,setShowRenombrar]=useState(false);
-  var [showRepro,setShowRepro]=useState(false);
-  var [showAgro,setShowAgro]=useState(false);
-  var [exportRodeo,setExportRodeo]=useState(null);
-  var [ask,confirmDialog]=useConfirm();
+function VistaLote({loteId,allLotes,setLotes,onBack}){
+  const lote=allLotes.find(l=>l.id===loteId);
+  const[vista,setVista]=useState("rodeo");
+  const[showNuevo,setShowNuevo]=useState(false);
+  const[detalleId,setDetalleId]=useState(null);
+  const[busq,setBusq]=useState("");
+  const[filtroCateg,setFiltroCateg]=useState("");
+  const[filtroSexo,setFiltroSexo]=useState("");
+  const[filtroPesoMin,setFiltroPesoMin]=useState("");
+  const[filtroPesoMax,setFiltroPesoMax]=useState("");
+  const[filtrosVisible,setFiltrosVisible]=useState(false);
+  const[resumenSesion,setResumenSesion]=useState(null);
+  const[showHistorial,setShowHistorial]=useState(false);
+  const[showRenombrar,setShowRenombrar]=useState(false);
 
   if(!lote)return null;
 
-  var esAgro=lote.tipo==="agricultura";
-  var esMixto=lote.tipo==="mixto";
-  var animales=lote.animales||[];
-  var sesiones=lote.sesiones||[];
-  var sesionEnCurso=lote.sesionEnCurso||null;
+  const animales=lote.animales||[];
+  const sesiones=lote.sesiones||[];
+  const sesionEnCurso=lote.sesionEnCurso||null;
 
-  function agregar(a){setLotes(function(prev){return prev.map(function(l){return l.id===loteId?Object.assign({},l,{animales:[...l.animales,a]}):l;});});}
-  function actualizar(a){
-    setLotes(function(prev){
-      return prev.map(function(l){
-        if(l.id===loteId)return Object.assign({},l,{animales:l.animales.map(function(x){return x.id===a.id?a:x;})});
-        if(a._moverA&&l.id===parseInt(a._moverA)){var clean=Object.assign({},a);delete clean._moverA;return Object.assign({},l,{animales:[...l.animales,clean]});}
+  const agregar=a=>setLotes(prev=>prev.map(l=>l.id===loteId?{...l,animales:[...l.animales,a]}:l));
+  const actualizar=a=>{
+    if(a._moverA){
+      const{_moverA,...limpio}=a;
+      setLotes(prev=>prev.map(l=>{
+        if(l.id===loteId)return{...l,animales:l.animales.filter(x=>x.id!==a.id)};
+        if(l.id===parseInt(_moverA))return{...l,animales:[...l.animales,limpio]};
         return l;
-      });
-    });
-  }
-  function eliminar(id){setLotes(function(prev){return prev.map(function(l){return l.id===loteId?Object.assign({},l,{animales:l.animales.filter(function(x){return x.id!==id;})}):l;});});}
-
-  var detalleAnimal=detalleId?animales.find(function(a){return a.id===detalleId;}):null;
-  var gdpVals=animales.map(function(a){return gdpTotal(a.pesajes);}).filter(function(v){return v!==null;}).map(Number);
-  var gdpProm=gdpVals.length>0?(gdpVals.reduce(function(s,v){return s+v;},0)/gdpVals.length).toFixed(3):null;
-  var totalMachos=animales.filter(function(a){return a.sexo==="Macho";}).length;
-  var totalHembras=animales.filter(function(a){return a.sexo==="Hembra";}).length;
-  var hayFiltros=!!(filtroCateg||filtroSexo||filtroPesoMin||filtroPesoMax);
-  var filtrados=animales.filter(function(a){
-    var qb=busq.trim().toUpperCase();
-    var up=ultimoPeso(a.pesajes);
-    return (!qb||a.caravana.includes(qb)||((a.obs||"").toLowerCase().includes(busq.toLowerCase())))&&
-      (!filtroCateg||a.categoria===filtroCateg)&&(!filtroSexo||a.sexo===filtroSexo)&&
-      (!filtroPesoMin||up>=parseFloat(filtroPesoMin))&&(!filtroPesoMax||up<=parseFloat(filtroPesoMax));
-  });
-
-  function finalizarSesion(s){
-    setLotes(function(prev){
-      return prev.map(function(l){
-        if(l.id!==loteId)return l;
-        var animalesAct=l.animales.map(function(a){
-          var reg=s.registros.find(function(r){return r.caravana===a.caravana;});
-          if(!reg)return a;
-          return Object.assign({},a,{pesajes:[...(a.pesajes||[]),{id:Date.now()+Math.random(),peso:reg.peso,fecha:s.fecha}]});
-        });
-        return Object.assign({},l,{animales:animalesAct,sesiones:[...(l.sesiones||[]),Object.assign({},s,{id:Date.now()})],sesionEnCurso:null});
-      });
-    });
-    setVista("rodeo");
-  }
-
-  function updateAgro(agro){setLotes(function(prev){return prev.map(function(l){return l.id===loteId?Object.assign({},l,{agricultura:agro}):l;});});}
-
-  function moverEst(destEstId,destLoteId){
-    if(setEstablecimientos){
-      setEstablecimientos(function(prev){
-        return prev.map(function(e){
-          if(e.id===estId)return Object.assign({},e,{lotes:e.lotes.map(function(l){return l.id===loteId?Object.assign({},l,{animales:l.animales.filter(function(a){return a.id!==detalleId;})}):l;})});
-          if(e.id===destEstId)return Object.assign({},e,{lotes:e.lotes.map(function(l){return l.id===destLoteId?Object.assign({},l,{animales:[...l.animales,detalleAnimal]}):l;})});
-          return e;
-        });
-      });
+      }));
+    } else {
+      setLotes(prev=>prev.map(l=>l.id===loteId?{...l,animales:l.animales.map(x=>x.id===a.id?a:x)}:l));
     }
-    setDetalleId(null);
-  }
+  };
+  const eliminar=id=>setLotes(prev=>prev.map(l=>l.id===loteId?{...l,animales:l.animales.filter(x=>x.id!==id)}:l));
 
-  if(showAgro){
-    return(
-      <div className="min-h-screen" style={{background:"#ffffff"}}>
-        <header className="bg-[#0a1607] border-b border-[#1a2e10] px-4 py-3 sticky top-0 z-10">
-          <div className="max-w-xl mx-auto flex items-center gap-3">
-            <button onClick={function(){setShowAgro(false);}} style={{boxShadow:"0 2px 0 #000"}} className="bg-[#4a4a00] text-[#d4d060] font-bold text-xs px-2 py-1.5 rounded-lg border border-[#8a8a00] active:translate-y-1 active:shadow-none">← Volver</button>
-            <h1 className="text-xl font-black text-[#d4d060]">{"🌾 "+lote.nombre}</h1>
-          </div>
-        </header>
-        <div className="max-w-xl mx-auto px-4 py-4">
-          <AgroVistaLote agro={lote.agricultura||{registros:[],gastos:[],potreros:[]}} onUpdate={updateAgro} loteNombre={lote.nombre}/>
-        </div>
-      </div>
-    );
-  }
+  const pausarSesion=(sesion)=>{
+    setLotes(prev=>prev.map(l=>l.id===loteId?{...l,sesionEnCurso:sesion}:l));
+    setVista("rodeo");
+  };
+  const finalizarSesion=sesion=>{
+    if(sesion.registros.length>0){
+      const sf={...sesion,id:Date.now()};
+      setLotes(prev=>prev.map(l=>l.id===loteId?{...l,sesionEnCurso:null,sesiones:[...(l.sesiones||[]),sf]}:l));
+      setResumenSesion(sf);
+    } else {
+      setLotes(prev=>prev.map(l=>l.id===loteId?{...l,sesionEnCurso:null}:l));
+    }
+    setVista("rodeo");
+  };
 
-  if(vista==="manga"){
-    return(
-      <SesionPesaje
-        loteId={loteId} allLotes={allLotes} setLotes={setLotes}
-        nombreLote={lote.nombre} sesionInicial={sesionEnCurso}
-        onPausar={function(s){setLotes(function(prev){return prev.map(function(l){return l.id===loteId?Object.assign({},l,{sesionEnCurso:s}):l;});});setVista("rodeo");}}
-        onFinalizar={function(s){setResumenSesion(s);finalizarSesion(s);}}
-      />
-    );
-  }
+  const filtrados=animales.filter(a=>{
+    const qb=busq.trim().toUpperCase();
+    const up=ultimoPeso(a.pesajes);
+    return(!qb||a.caravana.includes(qb)||a.obs?.toLowerCase().includes(busq.toLowerCase()))&&
+      (!filtroCateg||a.categoria===filtroCateg)&&(!filtroSexo||a.sexo===filtroSexo)&&
+      (!filtroPesoMin||up===null||up>=parseFloat(filtroPesoMin))&&
+      (!filtroPesoMax||up===null||up<=parseFloat(filtroPesoMax));
+  });
+  const hayFiltros=filtroCateg||filtroSexo||filtroPesoMin||filtroPesoMax;
+  const totalMachos=animales.filter(a=>a.sexo==="Macho").length;
+  const totalHembras=animales.filter(a=>a.sexo==="Hembra").length;
+  const gdpProm=(()=>{const vals=animales.map(a=>gdpTotal(a.pesajes)).filter(Boolean).map(Number);if(!vals.length)return null;return(vals.reduce((s,v)=>s+v,0)/vals.length).toFixed(3)})();
+  const detalleAnimal=detalleId?animales.find(a=>a.id===detalleId):null;
 
-  var tipoIcon=esAgro?"🌾":esMixto?"🔄":"🐄";
-  var tipoColor=esAgro?"#d4d060":esMixto?"#9090d0":"#c8e6a0";
+  if(vista==="manga")return(
+    <SesionPesaje
+      loteId={loteId}
+      setLotes={setLotes}
+      onPausar={pausarSesion}
+      onFinalizar={finalizarSesion}
+      sesionInicial={sesionEnCurso}
+      nombreLote={lote.nombre}
+    />
+  );
 
   return(
-    <div className="min-h-screen text-[#c8e6a0]" style={{background:"#ffffff"}}>
+    <div className="min-h-screen bg-[#060d04] text-[#c8e6a0]" style={{fontFamily:"'DM Sans',sans-serif"}}>
       <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700;900&display=swap" rel="stylesheet"/>
-      <header className="px-4 py-2 sticky top-0 z-10" style={{background:"#ffffff",borderBottom:"1px solid #e5e7eb"}}>
-        <div className="max-w-xl mx-auto">
-          <div className="flex items-center justify-center gap-3 py-1">
-            <h1 className="text-3xl font-black tracking-tight" style={{color:"#1a4a10"}}>{tipoIcon+" "+lote.nombre}</h1>
-            {!esAgro&&<span className="text-sm font-bold text-[#5aaa30] bg-[#1a3a10] border border-[#2a5018] px-2 py-1 rounded-full">{animales.length+" 🐄"}</span>}
+      <header className="bg-[#0a1607] border-b border-[#1a2e10] px-4 py-3 sticky top-0 z-10">
+        <div className="max-w-xl mx-auto flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <button onClick={onBack} className="text-[#6a8a40] hover:text-white text-lg w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/10 transition-colors">←</button>
+            <div>
+              <h1 className="text-lg font-bold text-[#c8e6a0]">{lote.nombre}</h1>
+              <p className="text-[10px] text-[#4a6a28] uppercase tracking-widest">{animales.length} animales</p>
+            </div>
           </div>
-          <div className="flex items-center justify-between mt-1">
-            <button onClick={onBack} style={{boxShadow:"0 2px 0 #000"}} className="btn-flash bg-[#2a4a18] hover:bg-[#3a6020] active:translate-y-1 active:shadow-none text-[#a0d060] font-bold text-xs px-2 py-1.5 rounded-lg border border-[#4a7a28]">← Volver</button>
-            {!esAgro&&(
-              <div className="flex gap-2">
-                {esMixto&&<button onClick={function(){setShowAgro(true);}} style={{boxShadow:"0 4px 0 #000"}} className="btn-flash bg-[#4a4a00] active:translate-y-1 active:shadow-none text-[#d4d060] font-bold px-3 py-2 rounded-xl text-sm border-2 border-[#8a8a00]">🌾</button>}
-
-                <button onClick={function(){setShowHistorial(true);}} style={{boxShadow:"0 4px 0 #1a3a08"}} className="btn-flash bg-[#2a4a18] active:translate-y-1 active:shadow-none border-2 border-[#4a7a28] text-[#a0d060] font-bold px-4 py-3 rounded-xl text-sm">📅{sesiones.length>0?" "+sesiones.length:""}</button>
-                <button onClick={function(){setVista("manga");}} style={{boxShadow:sesionEnCurso?"0 4px 0 #92400e":"0 4px 0 #0d3a05"}} className={"btn-flash font-bold px-4 py-3 rounded-xl text-sm active:translate-y-1 active:shadow-none border-2 "+(sesionEnCurso?"bg-amber-700 border-amber-500 text-white":"bg-[#2a6a10] border-[#4aaa18] text-[#a0f060]")}>
-                  {sesionEnCurso?"⚖️ Retomar":"⚖️ Pesar"}
-                </button>
-                <button onClick={function(){setShowNuevo(true);}} style={{boxShadow:"0 4px 0 #000"}} className="btn-flash bg-[#5aaa22] active:translate-y-1 active:shadow-none text-[#0a2000] font-black px-4 py-3 rounded-xl text-sm border-2 border-[#7ada3a]">+ Animal</button>
-              </div>
-            )}
+          <div className="flex gap-2">
+            <button onClick={()=>setShowHistorial(true)} className="bg-[#1a2e10] hover:bg-[#253d18] border border-[#2a4a18] text-[#6a8a40] font-bold px-3 py-2 rounded-xl text-xs transition-colors">📅 {sesiones.length>0?sesiones.length:""}</button>
+            <button onClick={()=>setVista("manga")} className={`font-bold px-3 py-2 rounded-xl text-xs transition-colors ${sesionEnCurso?"bg-amber-900/60 border border-amber-700 text-amber-300":"bg-[#1a3a08] hover:bg-[#253d10] border border-[#2a5010] text-[#8ac040]"}`}>
+              ⚖️ {sesionEnCurso?`Retomar (${sesionEnCurso.registros.length})`:"Pesar"}
+            </button>
+            <button onClick={()=>setShowNuevo(true)} className="bg-[#5aaa22] hover:bg-[#6aca2a] text-[#0a2000] font-black px-3 py-2 rounded-xl text-xs transition-colors border border-[#7ada3a]">+ Animal</button>
           </div>
         </div>
       </header>
 
       <main className="max-w-xl mx-auto px-4 py-4 flex flex-col gap-4">
-        {esAgro&&(
-          <AgroVistaLote agro={lote.agricultura||{registros:[],gastos:[],potreros:[]}} onUpdate={updateAgro} loteNombre={lote.nombre}/>
-        )}
-        {!esAgro&&(
-          <>
-            {sesionEnCurso&&sesionEnCurso.registros&&sesionEnCurso.registros.length>0&&(
-              <button onClick={function(){setVista("manga");}} className="w-full text-left bg-amber-950/30 border border-amber-800/60 rounded-2xl px-4 py-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="text-amber-400 text-lg">⏸</span>
-                    <div><p className="text-amber-300 font-bold text-sm">{"Sesión en curso — "+fmtFecha(sesionEnCurso.fecha)}</p><p className="text-amber-700 text-xs">{sesionEnCurso.registros.length+" pesajes · Tocá para retomar"}</p></div>
-                  </div>
-                  <span className="text-amber-500 text-lg">▶</span>
-                </div>
-              </button>
-            )}
-            {sesiones.length>0&&!sesionEnCurso&&(function(){
-              var ult=[...sesiones].sort(function(a,b){return b.fecha.localeCompare(a.fecha);})[0];
-              var totalKg=ult.registros.reduce(function(s,r){return s+r.peso;},0);
-              return(
-                <button onClick={function(){setResumenSesion(ult);}} className="w-full text-left bg-[#0a1f07] border border-[#2a5010] rounded-2xl px-4 py-3">
-                  <div className="flex items-center justify-between">
-                    <div><p className="text-[10px] text-[#4a7a28] uppercase font-bold">Última sesión</p><p className="text-gray-800 font-bold text-sm">{fmtFecha(ult.fecha)}</p></div>
-                    <div className="flex gap-4 text-right">
-                      <div><p className="text-[#a0d060] font-bold">{ult.registros.length}</p><p className="text-[9px] text-[#4a6a28] uppercase">animales</p></div>
-                      <div><p className="text-[#a0d060] font-bold">{totalKg.toLocaleString("es-AR")}</p><p className="text-[9px] text-[#4a6a28] uppercase">kg</p></div>
-                    </div>
-                  </div>
-                </button>
-              );
-            })()}
-
-            <button onClick={function(){setShowRepro(true);}} style={{boxShadow:"0 4px 0 #3a0020"}} className="w-full bg-[#5a0030] active:translate-y-1 active:shadow-none text-[#f0b0d0] font-black py-3 rounded-xl text-base border-2 border-[#c04080]">🐄 Gestión Reproductiva</button>
-            <div className="grid grid-cols-3 gap-2">
-              {[
-                {icon:"🐄",val:animales.length,label:"Total"},
-                {icon:"⚥",val:totalMachos+"M / "+totalHembras+"H",label:"Sexo"},
-                {icon:"📈",val:gdpProm?gdpProm+" kg/d":"—",label:"GDP prom."}
-              ].map(function(s){
-                return(
-                  <div key={s.label} className="bg-[#0a1607] border border-[#1a2e10] rounded-2xl p-3 text-center">
-                    <p className="text-base">{s.icon}</p>
-                    <p className="text-[#dff0b0] font-bold text-sm leading-tight mt-0.5">{s.val}</p>
-                    <p className="text-[9px] text-[#3a5a20] mt-0.5 uppercase tracking-wider">{s.label}</p>
-                  </div>
-                );
-              })}
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <div className="flex gap-2">
-                <input value={busq} onChange={function(e){setBusq(e.target.value);}} placeholder="🔍 Buscar caravana..."
-                  className="flex-1 bg-[#0a1207] border border-[#1e3010] rounded-xl px-3 py-2.5 text-[#dff0b0] text-sm focus:outline-none focus:border-[#6ab020] placeholder-[#2a4018]"/>
-                <button onClick={function(){setFiltrosVisible(function(v){return !v;});}} className={"px-3 py-2 rounded-xl text-xs font-bold border "+(hayFiltros?"bg-[#3a6a10] border-[#5a9a20] text-[#c8e6a0]":"bg-[#0a1207] border-[#1e3010] text-[#5a7a30]")}>
-                  {"⚙ Filtros"+(hayFiltros?" ("+(([filtroCateg,filtroSexo,filtroPesoMin,filtroPesoMax].filter(Boolean).length)+")"):"") }
-                </button>
+        {sesionEnCurso&&sesionEnCurso.registros.length>0&&(
+          <button onClick={()=>setVista("manga")} className="w-full text-left bg-amber-950/30 border border-amber-800/60 rounded-2xl px-4 py-3 hover:bg-amber-950/50 transition-colors">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-amber-400 text-lg">⏸</span>
+                <div><p className="text-amber-300 font-bold text-sm">Sesión en curso — {fmtFecha(sesionEnCurso.fecha)}</p><p className="text-amber-700 text-xs">{sesionEnCurso.registros.length} pesajes • Tocá para retomar</p></div>
               </div>
-              {hayFiltros&&filtrados.length>0&&(
-              <div className="flex items-center justify-between py-1">
-                <p className="text-xs text-[#5a7a30]">{filtrados.length+" animales filtrados"}</p>
-<div className="flex gap-2">
-                  <button onClick={function(){setShowMarcaMasiva(true);}} className="text-xs bg-[#1a2e10] border border-[#2a4a18] text-[#7aaa40] font-bold px-3 py-1.5 rounded-xl">🏷️ Marcar</button>
-                  {filtrados.some(function(a){return (a.marcas||[]).length>0;})&&(
-                    <button onClick={function(){
-                      setLotes(function(prev){
-                        return prev.map(function(l){
-                          if(l.id!==loteId)return l;
-                          return Object.assign({},l,{animales:l.animales.map(function(a){
-                            var esFiltrado=filtrados.find(function(f){return f.id===a.id;});
-                            return esFiltrado?Object.assign({},a,{marcas:[]}):a;
-                          })});
-                        });
-                      });
-                    }} className="text-xs bg-[#1a0010] border border-[#4a1030] text-[#c070a0] font-bold px-3 py-1.5 rounded-xl">✕ Desmarcar</button>
-                  )}
-                </div>
-              </div>
-            )}
-            {filtrosVisible&&(
-                <div className="bg-[#0a1207] border border-[#1e3010] rounded-2xl p-3 flex flex-col gap-3">
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="flex flex-col gap-1">
-                      <label className="text-[10px] text-[#5a7a30] uppercase font-bold">Categoría</label>
-                      <select value={filtroCateg} onChange={function(e){setFiltroCateg(e.target.value);}} className="bg-[#0f1a0a] border border-[#1e3010] rounded-xl px-2 py-2 text-[#dff0b0] text-sm focus:outline-none">
-                        <option value="">Todas</option>
-                        {CATEGORIAS.map(function(c){return <option key={c} value={c}>{c}</option>;})}
-                      </select>
-                    </div>
-                    <div className="flex flex-col gap-1">
-                      <label className="text-[10px] text-[#5a7a30] uppercase font-bold">Sexo</label>
-                      <select value={filtroSexo} onChange={function(e){setFiltroSexo(e.target.value);}} className="bg-[#0f1a0a] border border-[#1e3010] rounded-xl px-2 py-2 text-[#dff0b0] text-sm focus:outline-none">
-                        <option value="">Todos</option><option value="Macho">Macho</option><option value="Hembra">Hembra</option>
-                      </select>
-                    </div>
-                  </div>
-                  <div className="flex flex-col gap-1">
-                    <label className="text-[10px] text-[#5a7a30] uppercase font-bold">Peso (kg)</label>
-                    <div className="grid grid-cols-2 gap-2">
-                      <input type="number" placeholder="Mín" value={filtroPesoMin} onChange={function(e){setFiltroPesoMin(e.target.value);}} className="w-full bg-[#0f1a0a] border border-[#1e3010] rounded-xl px-3 py-2 text-[#dff0b0] text-sm focus:outline-none"/>
-                      <input type="number" placeholder="Máx" value={filtroPesoMax} onChange={function(e){setFiltroPesoMax(e.target.value);}} className="w-full bg-[#0f1a0a] border border-[#1e3010] rounded-xl px-3 py-2 text-[#dff0b0] text-sm focus:outline-none"/>
-                    </div>
-                  </div>
-                  {hayFiltros&&<button onClick={function(){setFiltroCateg("");setFiltroSexo("");setFiltroPesoMin("");setFiltroPesoMax("");}} className="text-xs text-[#6a8a40] text-left">✕ Limpiar filtros</button>}
-                </div>
-              )}
-            </div>
-
-            {filtrados.length===0?(
-              <div className="text-center py-16 text-[#2a4018]"><p className="text-4xl mb-3">🌾</p><p className="text-sm">{animales.length===0?"Agregá el primer animal":"Sin resultados"}</p></div>
-            ):(
-              <div className="flex flex-col gap-2">
-                {[...filtrados].sort(function(a,b){return a.caravana.localeCompare(b.caravana);}).map(function(a){
-                  var g=gdpTotal(a.pesajes);
-                  var up=ultimoPeso(a.pesajes);
-                  return(
-                    <button key={a.id} onClick={function(){setDetalleId(a.id);}} className={"w-full text-left rounded-2xl px-4 py-3 transition-all border "+marcaBgCard(a.marcas)} style={(a.marcas&&a.marcas.length>0)?{color:"#1a1a1a"}:{}}>
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <div className={(a.marcas&&a.marcas.length>0)?"rounded-xl w-10 h-10 flex items-center justify-center font-black text-white border text-sm bg-gray-600 border-gray-400":"bg-[#142808] rounded-xl w-10 h-10 flex items-center justify-center font-black text-[#6ab020] border border-[#1e3e10] text-sm"}>{a.caravana.slice(-2)}</div>
-                          <div>
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              <p className="font-bold text-[#dff0b0] text-sm">{a.caravana}</p>
-                              {(a.marcas||[]).map(function(m){
-                                return <span key={m.id} className={"text-xs px-3 py-1 rounded-full font-bold border ml-auto text-center "+marcaColor(m.color)}>{colorEmoji(m.color)+" "+m.motivo}</span>;
-                              })}
-                            </div>
-                            <div className="flex gap-1.5 mt-0.5"><Badge text={a.sexo} color={a.sexo==="Macho"?"macho":"hembra"}/><Badge text={a.categoria}/></div>
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          {up&&<p className="text-gray-800 font-bold text-sm">{up+" kg"}</p>}
-                          {g!==null&&<p className={"text-xs font-semibold "+(parseFloat(g)>=0?"text-green-400":"text-red-400")}>{(parseFloat(g)>=0?"▲":"▼")+" "+Math.abs(g)+" kg/d"}</p>}
-                          {!up&&<p className="text-[#2a4018] text-xs">Sin pesaje</p>}
-                        </div>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-
-            <div className="border-t border-[#1a2e10] pt-3 flex flex-col gap-2">
-              <button onClick={function(){setExportRodeo(exportDatosRodeo(animales,lote.nombre));}} className="w-full bg-[#0a1207] border border-[#1e3010] text-[#7aaa40] font-bold py-2.5 rounded-xl text-sm flex items-center justify-center gap-2">
-                📊 Exportar rodeo a Excel
-              </button>
-              {exportRodeo&&<ExportModal {...exportRodeo} onClose={function(){setExportRodeo(null);}}/>}
-            </div>
-          </>
-        )}
-
-        <div className="flex gap-2">
-          <button onClick={function(){setShowRenombrar(true);}} className="flex-1 text-xs text-[#6a8a40] border border-[#1a2e10] py-2 rounded-xl">✏️ Renombrar</button>
-          <button onClick={function(){ask("¿Eliminar lote "+lote.nombre+"?",function(){setLotes(function(prev){return prev.filter(function(l){return l.id!==loteId;});});onBack();});}} className="flex-1 text-xs text-red-600 border border-red-900 py-2 rounded-xl">🗑 Eliminar lote</button>
-        </div>
-      </main>
-
-      {showMarcaMasiva&&(
-        <Modal title={"🏷️ Marcar "+filtrados.length+" animales"} onClose={function(){setShowMarcaMasiva(false);}}>
-          <MarcaMasivaForm
-            count={filtrados.length}
-            onConfirm={function(color,motivo){
-              var nuevaMarca={id:Date.now(),color,motivo};
-              setLotes(function(prev){
-                return prev.map(function(l){
-                  if(l.id!==loteId)return l;
-                  return Object.assign({},l,{animales:l.animales.map(function(a){
-                    var esFiltrado=filtrados.find(function(f){return f.id===a.id;});
-                    if(!esFiltrado)return a;
-                    var yaExiste=(a.marcas||[]).find(function(m){return m.color===color&&m.motivo===motivo;});
-                    if(yaExiste)return a;
-                    return Object.assign({},a,{marcas:[...(a.marcas||[]),Object.assign({},nuevaMarca,{id:Date.now()+Math.random()})]});
-                  })});
-                });
-              });
-              setShowMarcaMasiva(false);
-            }}
-            onClose={function(){setShowMarcaMasiva(false);}}
-          />
-        </Modal>
-      )}
-      {showNuevo&&<NuevoAnimalModal onClose={function(){setShowNuevo(false);}} onSave={agregar}/>}
-      {detalleAnimal&&<DetalleModal key={detalleAnimal.id} animal={detalleAnimal} onClose={function(){setDetalleId(null);}} onUpdate={actualizar} onDelete={eliminar} lotes={allLotes} loteActualId={loteId} establecimientos={establecimientos} estId={estId} onMoverEst={moverEst}/>}
-      {resumenSesion&&<ResumenSesionModal sesion={resumenSesion} nombreLote={lote.nombre} onClose={function(){setResumenSesion(null);}}/>}
-      {showHistorial&&<HistorialModal sesiones={sesiones} onClose={function(){setShowHistorial(false);}} onVerSesion={function(s){setShowHistorial(false);setResumenSesion(s);}} onEliminarSesion={function(id){setLotes(function(prev){return prev.map(function(l){return l.id===loteId?Object.assign({},l,{sesiones:l.sesiones.filter(function(s){return s.id!==id;})}):l;});});}}/>}
-      {showRepro&&<ReproModal lote={lote} toros={establecimientos?(establecimientos.find(function(e){return e.id===estId;})||{}).toros||[]:lote.toros||[]} onClose={function(){setShowRepro(false);}} onUpdate={function(sesion,nuevosAnimales,deleteId){
-        setLotes(function(prev){
-          return prev.map(function(l){
-            if(l.id!==loteId)return l;
-            var ses=l.reproSesiones||[];
-            if(deleteId)ses=ses.filter(function(x){return x.id!==deleteId;});
-            else if(sesion)ses=[...ses,sesion];
-            var base=Object.assign({},l,{reproSesiones:ses});
-            if(nuevosAnimales)base=Object.assign({},base,{animales:nuevosAnimales});
-            return base;
-          });
-        });
-      }}/>}
-      {confirmDialog}
-      {showRenombrar&&<NuevoLoteModal loteEditar={lote} onClose={function(){setShowRenombrar(false);}} onSave={function(nombre){setLotes(function(prev){return prev.map(function(l){return l.id===loteId?Object.assign({},l,{nombre}):l;});});}}/>}
-    </div>
-  );
-}
-
-// ── Vista Establecimiento ─────────────────────────────────────────────────────
-function VistaEstablecimiento({estId,establecimientos,setEstablecimientos,onBack}){
-  var est=establecimientos.find(function(e){return e.id===estId;});
-  var [lotes,setLotesLocal]=useState(est?est.lotes||[]:[]);
-  var [loteActivoId,setLoteActivoId]=useState(null);
-  var [showNuevoLote,setShowNuevoLote]=useState(false);
-  var [showAlertas,setShowAlertas]=useState(false);
-  var [showToros,setShowToros]=useState(false);
-  var [showCuaderno,setShowCuaderno]=useState(false);
-  var [showRenombrar,setShowRenombrar]=useState(false);
-  var [ask,confirmDialog]=useConfirm();
-
-  useEffect(function(){
-    if(est)setLotesLocal(est.lotes||[]);
-  },[est]);
-
-  function setLotes(updater){
-    setLotesLocal(function(prev){
-      var next=typeof updater==="function"?updater(prev):updater;
-      setEstablecimientos(function(ests){return ests.map(function(e){return e.id===estId?Object.assign({},e,{lotes:next}):e;});});
-      return next;
-    });
-  }
-
-  if(!est)return null;
-
-  var alertas=est.alertas||[];
-  var alertasActivas=alertas.filter(function(a){
-    var est2=estadoAlerta(a.fechaHora,a.pasada);
-    return est2==="urgente"||est2==="pronto";
-  });
-
-  if(loteActivoId){
-    return(
-      <VistaLote
-        loteId={loteActivoId} allLotes={lotes} setLotes={setLotes}
-        onBack={function(){setLoteActivoId(null);}}
-        establecimientos={establecimientos} setEstablecimientos={setEstablecimientos} estId={estId}
-      />
-    );
-  }
-
-  return(
-    <div className="min-h-screen" style={{background:"#ffffff"}}>
-      <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700;900&display=swap" rel="stylesheet"/>
-      <header className="px-4 py-2 sticky top-0 z-10" style={{background:"#ffffff",borderBottom:"1px solid #e5e7eb"}}>
-        <div className="max-w-xl mx-auto">
-          <div className="flex items-center justify-center py-1">
-            <h1 className="text-3xl font-black text-[#1a4a10] tracking-tight">{est.nombre}</h1>
-          </div>
-          <div className="flex items-center justify-between mt-1">
-            <button onClick={onBack} style={{boxShadow:"0 2px 0 #000"}} className="btn-flash bg-gray-100 active:translate-y-1 active:shadow-none text-gray-700 font-bold text-xs px-2 py-1.5 rounded-lg border border-gray-300">← Volver</button>
-            <div className="flex gap-2">
-              <button onClick={function(){setShowToros(true);}} style={{boxShadow:"0 4px 0 #000"}} className="btn-flash bg-[#2a4a18] active:translate-y-1 active:shadow-none border-2 border-[#4a7a28] text-[#a0d060] font-bold px-4 py-3 rounded-xl text-sm">🐂 Toros</button>
-              <button onClick={function(){setShowCuaderno(true);}} style={{boxShadow:"0 4px 0 #000"}} className="btn-flash bg-[#2a4a18] active:translate-y-1 active:shadow-none border-2 border-[#4a7a28] text-[#a0d060] font-bold px-5 py-3 rounded-xl text-lg">📓</button>
-              <button onClick={function(){setShowAlertas(true);}} style={{boxShadow:"0 4px 0 #000"}} className={"btn-flash active:translate-y-1 active:shadow-none border-2 font-bold px-5 py-3 rounded-xl text-lg "+(alertasActivas.length>0?"bg-amber-700 border-amber-500 text-white":"bg-[#2a4a18] border-[#4a7a28] text-[#a0d060]")}>
-                {"🔔"+(alertasActivas.length>0?" "+alertasActivas.length:"")}
-              </button>
-              <button onClick={function(){setShowNuevoLote(true);}} style={{boxShadow:"0 4px 0 #000"}} className="btn-flash bg-[#5aaa22] active:translate-y-1 active:shadow-none text-[#0a2000] font-black px-5 py-3 rounded-xl text-base border-2 border-[#7ada3a]">+ Lote</button>
-            </div>
-          </div>
-        </div>
-      </header>
-
-      <main className="max-w-xl mx-auto px-4 py-4 flex flex-col gap-3">
-        {alertasActivas.length>0&&(
-          <button onClick={function(){setShowAlertas(true);}} className="w-full text-left bg-amber-900/20 border border-amber-700/50 rounded-2xl px-4 py-3">
-            <div className="flex items-center gap-2">
-              <span className="text-amber-400">🔔</span>
-              <p className="text-amber-300 font-bold text-sm">{alertasActivas.length+" alerta"+(alertasActivas.length>1?"s":"")+" pendiente"+(alertasActivas.length>1?"s":"")}</p>
+              <span className="text-amber-500 text-lg">▶</span>
             </div>
           </button>
         )}
+        {sesiones.length>0&&!sesionEnCurso&&(()=>{
+          const ult=[...sesiones].sort((a,b)=>b.fecha.localeCompare(a.fecha))[0];
+          const totalKg=ult.registros.reduce((s,r)=>s+r.peso,0);
+          return(<button onClick={()=>setResumenSesion(ult)} className="w-full text-left bg-[#0a1f07] border border-[#2a5010] rounded-2xl px-4 py-3 hover:bg-[#0d2a0a] transition-colors">
+            <div className="flex items-center justify-between">
+              <div><p className="text-[10px] text-[#4a7a28] uppercase font-bold">Última sesión</p><p className="text-[#c8e6a0] font-bold text-sm">{fmtFecha(ult.fecha)}</p></div>
+              <div className="flex gap-4 text-right">
+                <div><p className="text-[#a0d060] font-bold">{ult.registros.length}</p><p className="text-[9px] text-[#4a6a28] uppercase">animales</p></div>
+                <div><p className="text-[#a0d060] font-bold">{totalKg.toLocaleString("es-AR")}</p><p className="text-[9px] text-[#4a6a28] uppercase">kg</p></div>
+              </div>
+            </div>
+          </button>)
+        })()}
 
-        {lotes.length===0&&(
-          <div className="text-center py-16 text-[#3a5a20]"><p className="text-5xl mb-3">🐄</p><p className="text-sm">Creá el primer lote</p></div>
+        <div className="grid grid-cols-3 gap-2">
+          {[{icon:"🐄",val:animales.length,label:"Total"},{icon:"⚥",val:`${totalMachos}M / ${totalHembras}H`,label:"Sexo"},{icon:"📈",val:gdpProm?`${gdpProm} kg/d`:"—",label:"GDP prom."}].map(s=>(
+            <div key={s.label} className="bg-[#0a1607] border border-[#1a2e10] rounded-2xl p-3 text-center">
+              <p className="text-base">{s.icon}</p>
+              <p className="text-[#dff0b0] font-bold text-sm leading-tight mt-0.5">{s.val}</p>
+              <p className="text-[9px] text-[#3a5a20] mt-0.5 uppercase tracking-wider">{s.label}</p>
+            </div>
+          ))}
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <div className="flex gap-2">
+            <input value={busq} onChange={e=>setBusq(e.target.value)} placeholder="🔍 Buscar caravana..."
+              className="flex-1 bg-[#0a1207] border border-[#1e3010] rounded-xl px-3 py-2.5 text-[#dff0b0] text-sm focus:outline-none focus:border-[#6ab020] placeholder-[#2a4018]"/>
+            <button onClick={()=>setFiltrosVisible(v=>!v)} className={`px-3 py-2 rounded-xl text-xs font-bold border transition-colors ${hayFiltros?"bg-[#3a6a10] border-[#5a9a20] text-[#c8e6a0]":"bg-[#0a1207] border-[#1e3010] text-[#5a7a30] hover:text-[#9ac060]"}`}>
+              ⚙ Filtros{hayFiltros?` (${[filtroCateg,filtroSexo,filtroPesoMin,filtroPesoMax].filter(Boolean).length})`:""}
+            </button>
+          </div>
+          {filtrosVisible&&(
+            <div className="bg-[#0a1207] border border-[#1e3010] rounded-2xl p-3 flex flex-col gap-3">
+              <div className="grid grid-cols-2 gap-2">
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] text-[#5a7a30] uppercase tracking-wider font-bold">Categoría</label>
+                  <select value={filtroCateg} onChange={e=>setFiltroCateg(e.target.value)} className="bg-[#0f1a0a] border border-[#1e3010] rounded-xl px-2 py-2 text-[#dff0b0] text-sm focus:outline-none focus:border-[#6ab020]">
+                    <option value="">Todas</option>{CATEGORIAS.map(c=><option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] text-[#5a7a30] uppercase tracking-wider font-bold">Sexo</label>
+                  <select value={filtroSexo} onChange={e=>setFiltroSexo(e.target.value)} className="bg-[#0f1a0a] border border-[#1e3010] rounded-xl px-2 py-2 text-[#dff0b0] text-sm focus:outline-none focus:border-[#6ab020]">
+                    <option value="">Todos</option><option value="Macho">Macho</option><option value="Hembra">Hembra</option>
+                  </select>
+                </div>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] text-[#5a7a30] uppercase tracking-wider font-bold">Peso (kg)</label>
+                <div className="flex items-center gap-2">
+                  <input type="number" placeholder="Mín" value={filtroPesoMin} onChange={e=>setFiltroPesoMin(e.target.value)} className="flex-1 bg-[#0f1a0a] border border-[#1e3010] rounded-xl px-3 py-2 text-[#dff0b0] text-sm focus:outline-none focus:border-[#6ab020] placeholder-[#2a4018]"/>
+                  <span className="text-[#3a5a20] font-bold">—</span>
+                  <input type="number" placeholder="Máx" value={filtroPesoMax} onChange={e=>setFiltroPesoMax(e.target.value)} className="flex-1 bg-[#0f1a0a] border border-[#1e3010] rounded-xl px-3 py-2 text-[#dff0b0] text-sm focus:outline-none focus:border-[#6ab020] placeholder-[#2a4018]"/>
+                </div>
+              </div>
+              {hayFiltros&&<button onClick={()=>{setFiltroCateg("");setFiltroSexo("");setFiltroPesoMin("");setFiltroPesoMax("")}} className="text-xs text-[#6a8a40] hover:text-[#a0c060] transition-colors text-left">✕ Limpiar filtros</button>}
+            </div>
+          )}
+        </div>
+
+        {filtrados.length===0?(
+          <div className="text-center py-16 text-[#2a4018]"><p className="text-4xl mb-3">🌾</p><p className="text-sm">{animales.length===0?"Agregá el primer animal":"Sin resultados"}</p></div>
+        ):(
+          <div className="flex flex-col gap-2">
+            {[...filtrados].sort((a,b)=>a.caravana.localeCompare(b.caravana)).map(a=>{
+              const g=gdpTotal(a.pesajes);
+              const up=ultimoPeso(a.pesajes);
+              return(
+                <button key={a.id} onClick={()=>setDetalleId(a.id)} className="w-full text-left bg-[#0a1607] border border-[#1a2e10] hover:border-[#3a6a18] rounded-2xl px-4 py-3 transition-all hover:bg-[#0d1e0a]">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="bg-[#142808] rounded-xl w-10 h-10 flex items-center justify-center font-black text-[#6ab020] border border-[#1e3e10] text-sm">{a.caravana.slice(-2)}</div>
+                      <div><p className="font-bold text-[#dff0b0] text-sm">{a.caravana}</p><div className="flex gap-1.5 mt-0.5"><Badge text={a.sexo} color={a.sexo==="Macho"?"macho":"hembra"}/><Badge text={a.categoria}/></div></div>
+                    </div>
+                    <div className="text-right">
+                      {up&&<p className="text-[#dff0b0] font-bold text-sm">{up} kg</p>}
+                      {g!==null&&<p className={`text-xs font-semibold ${parseFloat(g)>=0?"text-green-400":"text-red-400"}`}>{parseFloat(g)>=0?"▲":"▼"} {Math.abs(g)} kg/d</p>}
+                      {!up&&<p className="text-[#2a4018] text-xs">Sin pesaje</p>}
+                    </div>
+                  </div>
+                </button>
+              )
+            })}
+          </div>
         )}
 
-        {lotes.map(function(lote){
-          var animales=lote.animales||[];
-          var tipoIcon=lote.tipo==="agricultura"?"🌾":lote.tipo==="mixto"?"🔄":"🐄";
-          var tipoColor=lote.tipo==="agricultura"?"#d4d060":lote.tipo==="mixto"?"#9090d0":"#a0d060";
-          return(
-            <button key={lote.id} onClick={function(){setLoteActivoId(lote.id);}} className="w-full text-left bg-[#0a1607] border border-[#1a2e10] hover:border-[#3a6a18] rounded-2xl overflow-hidden flex transition-all">
-              <div className="w-2 shrink-0" style={{background:tipoColor}}/>
-              <div className="flex items-center gap-3 px-4 py-4 flex-1 min-w-0">
-                <span className="text-3xl">{tipoIcon}</span>
-                <div className="flex-1 min-w-0">
-                  <p className="font-black text-[#c8e6a0] text-lg leading-tight truncate">{lote.nombre}</p>
-                  {lote.tipo!=="agricultura"&&<p className="text-[#5a7a30] text-sm">{animales.length+" animales"+(animales.length>0?" · "+animales.filter(function(a){return a.sexo==="Macho";}).length+"M / "+animales.filter(function(a){return a.sexo==="Hembra";}).length+"H":"")}</p>}
-                  {lote.tipo==="agricultura"&&<p className="text-[#8a8a40] text-sm">{(lote.agricultura?lote.agricultura.potreros&&lote.agricultura.potreros.length+" potreros":"0 potreros")}</p>}
-                </div>
-                <span className="text-[#3a5a20] text-2xl font-bold shrink-0">›</span>
-              </div>
-            </button>
-          );
-        })}
-
-        <div className="flex gap-2 pt-2">
-          <button onClick={function(){setShowRenombrar(true);}} className="flex-1 text-xs text-[#6a8a40] border border-[#1a2e10] py-2 rounded-xl">✏️ Renombrar</button>
-          <button onClick={function(){ask("¿Eliminar "+est.nombre+" y todos sus lotes?",function(){setEstablecimientos(function(prev){return prev.filter(function(e){return e.id!==estId;});});onBack();});}} className="flex-1 text-xs text-red-600 border border-red-900 py-2 rounded-xl">🗑 Eliminar</button>
+        <div className="border-t border-[#1a2e10] pt-3 flex gap-2">
+          <button onClick={()=>setShowRenombrar(true)} className="flex-1 text-xs text-[#6a8a40] border border-[#1a2e10] hover:bg-[#0d1e0a] py-2 rounded-xl transition-colors">✏️ Renombrar lote</button>
+          <button onClick={()=>{if(confirm(`¿Eliminar "${lote.nombre}"?`)){setLotes(prev=>prev.filter(l=>l.id!==loteId));onBack()}}} className="flex-1 text-xs text-red-600 border border-red-900 hover:bg-red-950/30 py-2 rounded-xl transition-colors">🗑 Eliminar lote</button>
         </div>
       </main>
 
-      {showNuevoLote&&<NuevoLoteModal onClose={function(){setShowNuevoLote(false);}} onSave={function(nombre,tipo){setLotes(function(prev){return [...prev,{id:Date.now(),nombre,tipo,animales:[],sesiones:[],sesionEnCurso:null,reproSesiones:[],agricultura:{registros:[],gastos:[],potreros:[]}}];});}}/>}
-      {showAlertas&&<AlertasModal alertas={alertas} nombreEst={est.nombre} lotes={lotes} onClose={function(){setShowAlertas(false);}} onSave={function(al){setEstablecimientos(function(prev){return prev.map(function(e){return e.id===estId?Object.assign({},e,{alertas:al}):e;});});}}/>}
-      {showToros&&<TorosModal est={est} onClose={function(){setShowToros(false);}} onUpdate={function(toros){setEstablecimientos(function(prev){return prev.map(function(e){return e.id===estId?Object.assign({},e,{toros}):e;});});}}/>}
-      {showCuaderno&&<CuadernoModal notas={est.notas||""} onClose={function(){setShowCuaderno(false);}} onSave={function(n){setEstablecimientos(function(prev){return prev.map(function(e){return e.id===estId?Object.assign({},e,{notas:n}):e;});});}}/>}
-      {showRenombrar&&<NuevoLoteModal loteEditar={{nombre:est.nombre}} onClose={function(){setShowRenombrar(false);}} onSave={function(nombre){setEstablecimientos(function(prev){return prev.map(function(e){return e.id===estId?Object.assign({},e,{nombre}):e;});});}}/>}
-      {confirmDialog}
+      {showNuevo&&<NuevoAnimalModal onClose={()=>setShowNuevo(false)} onSave={agregar}/>}
+      {detalleAnimal&&<DetalleModal key={detalleAnimal.id} animal={detalleAnimal} onClose={()=>setDetalleId(null)} onUpdate={actualizar} onDelete={eliminar} lotes={allLotes} loteActualId={loteId}/>}
+      {resumenSesion&&<ResumenSesionModal sesion={resumenSesion} onClose={()=>setResumenSesion(null)}/>}
+      {showHistorial&&<HistorialModal sesiones={sesiones} onClose={()=>setShowHistorial(false)} onVerSesion={s=>{setShowHistorial(false);setResumenSesion(s)}} onEliminarSesion={id=>setLotes(prev=>prev.map(l=>l.id===loteId?{...l,sesiones:l.sesiones.filter(s=>s.id!==id)}:l))}/>}
+      {showRenombrar&&<NuevoLoteModal loteEditar={lote} onClose={()=>setShowRenombrar(false)} onSave={nombre=>setLotes(prev=>prev.map(l=>l.id===loteId?{...l,nombre}:l))}/>}
     </div>
-  );
+  )
 }
 
 // ── App ───────────────────────────────────────────────────────────────────────
 export default function App(){
-  useEffect(function(){
-    var s=document.createElement("style");
-    s.innerHTML=flashStyle;
-    document.head.appendChild(s);
-    return function(){document.head.removeChild(s);};
-  },[]);
-  var [establecimientos,setEstablecimientos]=useState(function(){
-    var saved=leerStorage("ganadera_establecimientos_v1",null);
-    if(saved)return saved;
-    var oldLotes=leerStorage("ganadera_lotes_v1",null);
-    if(oldLotes){
-      return [{id:Date.now(),nombre:"Mi establecimiento",lotes:oldLotes,alertas:[],toros:[],notas:""}];
-    }
-    return [];
-  });
-  var [estActivoId,setEstActivoId]=useState(null);
-  var [showNuevoEst,setShowNuevoEst]=useState(false);
-  var [ask,confirmDialog]=useConfirm();
+  const[lotes,setLotes]=useStorage("ganadera_lotes_v1",[]);
+  const[loteActivoId,setLoteActivoId]=useState(null);
+  const[showNuevoLote,setShowNuevoLote]=useState(false);
 
-  useEffect(function(){guardarStorage("ganadera_establecimientos_v1",establecimientos);},[establecimientos]);
-
-  var estActivo=estActivoId?establecimientos.find(function(e){return e.id===estActivoId;}):null;
-
-  if(estActivo){
-    return(
-      <VistaEstablecimiento
-        estId={estActivoId}
-        establecimientos={establecimientos}
-        setEstablecimientos={setEstablecimientos}
-        onBack={function(){setEstActivoId(null);}}
-      />
-    );
+  if(loteActivoId&&lotes.find(l=>l.id===loteActivoId)){
+    return <VistaLote loteId={loteActivoId} allLotes={lotes} setLotes={setLotes} onBack={()=>setLoteActivoId(null)}/>;
   }
 
+  const totalAnimales=lotes.reduce((s,l)=>s+(l.animales||[]).length,0);
+
   return(
-    <div className="min-h-screen" style={{background:"#ffffff"}}>
+    <div className="min-h-screen bg-[#060d04] text-[#c8e6a0]" style={{fontFamily:"'DM Sans',sans-serif"}}>
       <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700;900&display=swap" rel="stylesheet"/>
-      <header className="px-4 pt-6 pb-4 border-b border-[#d0e8c0]">
+      <header className="bg-[#0a1607] border-b border-[#1a2e10] px-4 py-4 sticky top-0 z-10">
         <div className="max-w-xl mx-auto flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-black text-[#1a4a10] tracking-tight">🐄 Rodeo</h1>
-            <p className="text-[#5a8a30] text-xs">Gestión ganadera y agrícola</p>
+            <h1 className="text-xl font-bold text-[#c8e6a0]">🐄 Rodeo</h1>
+            <p className="text-[10px] text-[#4a6a28] uppercase tracking-widest">{totalAnimales} animales · {lotes.length} lotes</p>
           </div>
-          <button onClick={function(){setShowNuevoEst(true);}} style={{boxShadow:"0 4px 0 #1a4a10"}} className="btn-flash bg-[#5aaa22] active:translate-y-1 active:shadow-none text-[#0a2000] font-black px-4 py-3 rounded-xl text-sm border-2 border-[#7ada3a]">+ Establecimiento</button>
+          <button onClick={()=>setShowNuevoLote(true)} className="bg-[#5aaa22] hover:bg-[#6aca2a] text-[#0a2000] font-black px-5 py-2.5 rounded-xl text-base transition-colors shadow-lg border-2 border-[#7ada3a]">＋ Lote</button>
         </div>
       </header>
-
       <main className="max-w-xl mx-auto px-4 py-4 flex flex-col gap-3">
-        {establecimientos.length===0&&(
-          <div className="text-center py-20 text-[#3a5a20]">
-            <p className="text-6xl mb-4">🐄</p>
-            <p className="text-xl font-black text-[#5a8a30] mb-2">Bienvenido a Rodeo</p>
-            <p className="text-sm">Creá tu primer establecimiento para empezar</p>
+        {lotes.length===0?(
+          <div className="text-center py-20 text-[#2a4018]">
+            <p className="text-5xl mb-4">🌾</p>
+            <p className="text-base font-bold text-[#4a7a30] mb-1">Sin lotes todavía</p>
+            <p className="text-sm mb-6">Creá tu primer lote para empezar</p>
+            <button onClick={()=>setShowNuevoLote(true)} className="bg-[#5aaa22] hover:bg-[#6aca2a] text-[#0a2000] font-black px-6 py-3 rounded-2xl text-sm transition-colors border-2 border-[#7ada3a]">＋ Crear primer lote</button>
           </div>
-        )}
-        {establecimientos.map(function(est){
-          var totalAnimales=(est.lotes||[]).reduce(function(s,l){return s+(l.animales||[]).length;},0);
-          var alertasAct=(est.alertas||[]).filter(function(a){var e2=estadoAlerta(a.fechaHora,a.pasada);return e2==="urgente"||e2==="pronto";});
-          return(
-            <button key={est.id} onClick={function(){setEstActivoId(est.id);}} className="w-full text-left bg-[#0a1607] border border-[#1a2e10] hover:border-[#3a6a18] rounded-2xl overflow-hidden flex transition-all">
-              <div className="w-2 shrink-0 bg-[#5aaa22]"/>
-              <div className="flex items-center gap-4 px-4 py-4 flex-1 min-w-0">
-                <svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <rect width="48" height="48" rx="14" fill="#d4eaff"/>
-                  {/* Cielo */}
-                  <rect x="0" y="0" width="48" height="30" rx="14" fill="#87ceeb"/>
-                  {/* Pasto */}
-                  <rect x="0" y="30" width="48" height="18" fill="#4aaa20"/>
-                  <rect x="0" y="42" width="48" height="6" rx="0" fill="#3a8a18"/>
-                  {/* Árboles altos (cipreses) */}
-                  <ellipse cx="10" cy="18" rx="3" ry="10" fill="#1a5a10"/>
-                  <ellipse cx="16" cy="16" rx="3" ry="12" fill="#1a6a10"/>
-                  <ellipse cx="22" cy="17" rx="2.5" ry="11" fill="#1a5a10"/>
-                  {/* Casa - pared */}
-                  <rect x="4" y="26" width="40" height="14" rx="1" fill="#f0ede0"/>
-                  {/* Casa - techo verde */}
-                  <path d="M3 27 L24 20 L45 27Z" fill="#2a6a18"/>
-                  {/* Ventanas */}
-                  <rect x="7" y="28" width="5" height="5" rx="0.5" fill="#8ab0d0"/>
-                  <rect x="15" y="28" width="5" height="5" rx="0.5" fill="#8ab0d0"/>
-                  <rect x="33" y="28" width="5" height="5" rx="0.5" fill="#8ab0d0"/>
-                  {/* Puerta */}
-                  <rect x="23" y="29" width="5" height="11" rx="0.5" fill="#8a6030"/>
-                </svg>
-                <div className="flex-1 min-w-0">
-                  <p className="font-black text-[#c8e6a0] text-xl leading-tight">{est.nombre}</p>
-                  <p className="text-[#5a7a30] text-sm">{(est.lotes||[]).length+" lotes · "+totalAnimales+" animales"}</p>
-                  {alertasAct.length>0&&<p className="text-amber-400 text-xs font-bold mt-0.5">{"🔔 "+alertasAct.length+" alerta"+(alertasAct.length>1?"s":"")}</p>}
+        ):(
+          lotes.map(lote=>{
+            const animales=lote.animales||[];
+            const machos=animales.filter(a=>a.sexo==="Macho").length;
+            const hembras=animales.filter(a=>a.sexo==="Hembra").length;
+            const ult=[...(lote.sesiones||[])].sort((a,b)=>b.fecha.localeCompare(a.fecha))[0]||null;
+            const enCurso=lote.sesionEnCurso&&lote.sesionEnCurso.registros.length>0;
+            return(
+              <button key={lote.id} onClick={()=>setLoteActivoId(lote.id)} className="w-full text-left bg-[#0a1607] border border-[#1a2e10] hover:border-[#3a6a18] rounded-2xl px-4 py-4 transition-all hover:bg-[#0d1e0a]">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <div className="bg-[#142808] rounded-xl w-10 h-10 flex items-center justify-center text-[#6ab020] text-xl border border-[#1e3e10]">🌿</div>
+                    <div>
+                      <p className="font-bold text-[#dff0b0] text-base">{lote.nombre}</p>
+                      <p className="text-[10px] text-[#4a6a28] uppercase tracking-wider">{animales.length} animales · {machos}M {hembras}H</p>
+                    </div>
+                  </div>
+                  {enCurso&&<span className="text-[10px] bg-amber-900/50 text-amber-300 border border-amber-700 px-2 py-0.5 rounded-full font-bold">⏸ EN CURSO</span>}
                 </div>
-                <span className="text-[#3a5a20] text-2xl font-bold shrink-0">›</span>
-              </div>
-            </button>
-          );
-        })}
+                {ult&&<p className="text-[10px] text-[#3a5a20]">Última sesión: {fmtFecha(ult.fecha)} · {ult.registros.length} pesajes</p>}
+              </button>
+            )
+          })
+        )}
       </main>
-
-      {showNuevoEst&&(
-        <Modal title="🌾 Nuevo establecimiento" onClose={function(){setShowNuevoEst(false);}}>
-          <NuevoEstForm onSave={function(nombre){setEstablecimientos(function(prev){return [...prev,{id:Date.now(),nombre,lotes:[],alertas:[],toros:[],notas:""}];});setShowNuevoEst(false);}} onClose={function(){setShowNuevoEst(false);}}/>
-        </Modal>
-      )}
-      {confirmDialog}
+      {showNuevoLote&&<NuevoLoteModal onClose={()=>setShowNuevoLote(false)} onSave={nombre=>{setLotes(prev=>[...prev,{id:Date.now(),nombre,animales:[],sesiones:[],sesionEnCurso:null}])}}/>}
     </div>
-  );
-}
-
-function NuevoEstForm({onSave,onClose}){
-  var [nombre,setNombre]=useState("");
-  var ref=useRef();
-  useEffect(function(){if(ref.current)ref.current.focus();},[]);
-  return(
-    <div className="flex flex-col gap-3">
-      <Inp label="Nombre del establecimiento" value={nombre} onChange={function(e){setNombre(e.target.value);}} inputRef={ref} placeholder="Ej: La Esperanza, Campo Norte..."/>
-      <button onClick={function(){if(!nombre.trim())return;onSave(nombre.trim());}} style={{boxShadow:"0 4px 0 #000"}} className="w-full bg-[#5aaa22] active:translate-y-1 active:shadow-none text-[#0a2000] font-black py-3 rounded-xl border-2 border-[#7ada3a]">Crear</button>
-    </div>
-  );
+  )
 }
