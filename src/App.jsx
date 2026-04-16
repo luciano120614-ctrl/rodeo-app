@@ -553,7 +553,7 @@ function SesionPesaje({loteId,allLotes,setLotes,nombreLote,sesionInicial,onPausa
     <div className="fixed inset-0 z-40 flex flex-col" style={{background:"#ffffff"}}>
       <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700;900&display=swap" rel="stylesheet"/>
       {/* Header */}
-      <div className="bg-[#0a1607] border-b border-[#1a2e10] px-4 py-2 shrink-0">
+      <div className="px-4 py-2 shrink-0" style={{background:"#0a1607",borderBottom:"1px solid #1a2e10"}}>
         <div className="flex items-center justify-between">
           <div>
             <p className="text-[10px] text-[#4a6a28] uppercase tracking-widest font-bold">{"Manga · "+nombreLote}</p>
@@ -567,7 +567,7 @@ function SesionPesaje({loteId,allLotes,setLotes,nombreLote,sesionInicial,onPausa
       </div>
       {/* Stats bar */}
       {log.length>0&&(
-        <div className="bg-[#0a1f07] border-b border-[#1a3010] px-4 py-2 shrink-0 flex gap-4 overflow-x-auto">
+        <div className="px-4 py-2 shrink-0 flex gap-4 overflow-x-auto" style={{background:"#0a1f07",borderBottom:"1px solid #1a3010"}}>
           <div className="flex items-center gap-1.5 shrink-0"><span className="text-[10px] text-[#4a6a28] uppercase">Pesados:</span><span className="text-gray-800 font-bold text-sm">{log.length}</span></div>
           <div className="flex items-center gap-1.5 shrink-0"><span className="text-[10px] text-[#4a6a28] uppercase">Total kg:</span><span className="text-gray-800 font-bold text-sm">{totalKg.toLocaleString("es-AR")}</span></div>
           {kgGanTotal!==0&&<div className="flex items-center gap-1.5 shrink-0"><span className="text-[10px] text-[#4a6a28] uppercase">Ganados:</span><span className={"font-bold text-sm "+(kgGanTotal>=0?"text-green-400":"text-red-400")}>{(kgGanTotal>0?"+":"")+kgGanTotal.toFixed(1)+" kg"}</span></div>}
@@ -662,6 +662,9 @@ function ResumenSesionModal({sesion,nombreLote,onClose}){
     ["▼ Más liviano",minR?minR.caravana+" "+minR.peso+"kg":"—"],
   ];
   if(kgGanVals.length>0)stats.push(["💪 Kg ganados",kgGanTotal.toFixed(1)+" kg"]);
+  var diasVals=regs.filter(function(r){return r.diasTranscurridos!==null&&r.diasTranscurridos!==undefined;});
+  var diasProm=diasVals.length>0?Math.round(diasVals.reduce(function(s,r){return s+r.diasTranscurridos;},0)/diasVals.length):null;
+  if(diasProm!==null)stats.push(["📅 Días desde últ. pesaje",diasProm+" días"]);
 
   return(
     <Modal title={"📋 Sesión "+fmtFecha(sesion.fecha)} onClose={onClose}>
@@ -1593,7 +1596,7 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
   return(
     <div className="min-h-screen text-[#c8e6a0]" style={{background:"#ffffff"}}>
       <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700;900&display=swap" rel="stylesheet"/>
-      <header className="bg-[#0a1607] border-b border-[#1a2e10] px-4 py-2 sticky top-0 z-10">
+      <header className="px-4 py-2 sticky top-0 z-10" style={{background:"#0a1607",borderBottom:"1px solid #1a2e10"}}>
         <div className="max-w-xl mx-auto">
           <div className="flex items-center justify-center gap-3 py-1">
             <h1 className="text-3xl font-black tracking-tight" style={{color:tipoColor}}>{tipoIcon+" "+lote.nombre}</h1>
@@ -1865,7 +1868,7 @@ function VistaEstablecimiento({estId,establecimientos,setEstablecimientos,onBack
   return(
     <div className="min-h-screen" style={{background:"#ffffff"}}>
       <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700;900&display=swap" rel="stylesheet"/>
-      <header className="bg-[#0a1607] border-b border-[#1a2e10] px-4 py-2 sticky top-0 z-10">
+      <header className="px-4 py-2 sticky top-0 z-10" style={{background:"#0a1607",borderBottom:"1px solid #1a2e10"}}>
         <div className="max-w-xl mx-auto">
           <div className="flex items-center justify-center py-1">
             <h1 className="text-3xl font-black text-[#c8e6a0] tracking-tight">{est.nombre}</h1>
