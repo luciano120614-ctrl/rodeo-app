@@ -1,0 +1,9 @@
+{
+  "name": "Rodeo - Gestión Ganadera",
+  "short_name": "Rodeo",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#0a1607",
+  "icons": []
+}
