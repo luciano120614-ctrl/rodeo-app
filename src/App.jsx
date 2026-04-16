@@ -553,7 +553,7 @@ function SesionPesaje({loteId,allLotes,setLotes,nombreLote,sesionInicial,onPausa
     <div className="fixed inset-0 z-40 flex flex-col" style={{background:"#ffffff"}}>
       <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700;900&display=swap" rel="stylesheet"/>
       {/* Header */}
-      <div className="px-4 py-2 shrink-0" style={{background:"#0a1607",borderBottom:"1px solid #1a2e10"}}>
+      <div className="px-4 py-2 shrink-0" style={{background:"#ffffff",borderBottom:"1px solid #e5e7eb"}}>
         <div className="flex items-center justify-between">
           <div>
             <p className="text-[10px] text-[#4a6a28] uppercase tracking-widest font-bold">{"Manga · "+nombreLote}</p>
@@ -1596,10 +1596,10 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
   return(
     <div className="min-h-screen text-[#c8e6a0]" style={{background:"#ffffff"}}>
       <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700;900&display=swap" rel="stylesheet"/>
-      <header className="px-4 py-2 sticky top-0 z-10" style={{background:"#0a1607",borderBottom:"1px solid #1a2e10"}}>
+      <header className="px-4 py-2 sticky top-0 z-10" style={{background:"#ffffff",borderBottom:"1px solid #e5e7eb"}}>
         <div className="max-w-xl mx-auto">
           <div className="flex items-center justify-center gap-3 py-1">
-            <h1 className="text-3xl font-black tracking-tight" style={{color:tipoColor}}>{tipoIcon+" "+lote.nombre}</h1>
+            <h1 className="text-3xl font-black tracking-tight" style={{color:"#1a4a10"}}>{tipoIcon+" "+lote.nombre}</h1>
             {!esAgro&&<span className="text-sm font-bold text-[#5aaa30] bg-[#1a3a10] border border-[#2a5018] px-2 py-1 rounded-full">{animales.length+" 🐄"}</span>}
           </div>
           <div className="flex items-center justify-between mt-1">
@@ -1868,13 +1868,13 @@ function VistaEstablecimiento({estId,establecimientos,setEstablecimientos,onBack
   return(
     <div className="min-h-screen" style={{background:"#ffffff"}}>
       <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700;900&display=swap" rel="stylesheet"/>
-      <header className="px-4 py-2 sticky top-0 z-10" style={{background:"#0a1607",borderBottom:"1px solid #1a2e10"}}>
+      <header className="px-4 py-2 sticky top-0 z-10" style={{background:"#ffffff",borderBottom:"1px solid #e5e7eb"}}>
         <div className="max-w-xl mx-auto">
           <div className="flex items-center justify-center py-1">
-            <h1 className="text-3xl font-black text-[#c8e6a0] tracking-tight">{est.nombre}</h1>
+            <h1 className="text-3xl font-black text-[#1a4a10] tracking-tight">{est.nombre}</h1>
           </div>
           <div className="flex items-center justify-between mt-1">
-            <button onClick={onBack} style={{boxShadow:"0 2px 0 #000"}} className="btn-flash bg-[#2a4a18] active:translate-y-1 active:shadow-none text-[#a0d060] font-bold text-xs px-2 py-1.5 rounded-lg border border-[#4a7a28]">← Volver</button>
+            <button onClick={onBack} style={{boxShadow:"0 2px 0 #000"}} className="btn-flash bg-gray-100 active:translate-y-1 active:shadow-none text-gray-700 font-bold text-xs px-2 py-1.5 rounded-lg border border-gray-300">← Volver</button>
             <div className="flex gap-2">
               <button onClick={function(){setShowToros(true);}} style={{boxShadow:"0 4px 0 #000"}} className="btn-flash bg-[#2a4a18] active:translate-y-1 active:shadow-none border-2 border-[#4a7a28] text-[#a0d060] font-bold px-4 py-3 rounded-xl text-sm">🐂 Toros</button>
               <button onClick={function(){setShowCuaderno(true);}} style={{boxShadow:"0 4px 0 #000"}} className="btn-flash bg-[#2a4a18] active:translate-y-1 active:shadow-none border-2 border-[#4a7a28] text-[#a0d060] font-bold px-5 py-3 rounded-xl text-lg">📓</button>
