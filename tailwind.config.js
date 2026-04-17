@@ -1,41 +1,26 @@
-export default function Rodeo() {
-  return (
-    <div className="min-h-screen bg-[#f5f5f5] text-[#111]">
-      
-      {/* HEADER */}
-      <div className="flex items-center justify-between px-4 py-4 border-b border-gray-200">
-        <div>
-          <h1 className="text-xl font-semibold flex items-center gap-2">
-            🐄 Rodeo
-          </h1>
-          <p className="text-sm text-gray-500">
-            0 animales · 0 lotes
-          </p>
-        </div>
-
-        <button className="bg-white border border-gray-300 px-4 py-2 rounded-xl shadow-sm">
-          + Lote
-        </button>
-      </div>
-
-      {/* CONTENIDO VACÍO */}
-      <div className="flex flex-col items-center justify-center text-center mt-24 px-6">
-        
-        <div className="text-5xl mb-4">🌾</div>
-
-        <h2 className="text-lg font-semibold mb-2">
-          Sin lotes todavía
-        </h2>
-
-        <p className="text-gray-500 mb-6">
-          Creá tu primer lote para empezar
-        </p>
-
-        <button className="bg-white border border-gray-300 px-6 py-3 rounded-xl shadow-sm font-medium">
-          + Crear primer lote
-        </button>
-      </div>
-
-    </div>
-  );
+/** @type {import('tailwindcss').Config} */
+export default {
+  content: [
+    "./index.html",
+    "./src/**/*.{js,ts,jsx,tsx}",
+  ],
+  theme: {
+    extend: {},
+  },
+  plugins: [],
+  safelist: [
+    "bg-[#0a1607]","bg-[#0a1207]","bg-[#162208]","bg-[#0d1a08]","bg-[#0a1f07]",
+    "bg-[#142808]","bg-[#1a3a10]","bg-[#1a2e10]","bg-[#1a4a10]","bg-[#2a4a18]",
+    "bg-[#2a5015]","bg-[#3a7a10]","bg-[#4a8a18]","bg-[#5aaa22]","bg-[#0f2a40]",
+    "bg-[#0f1a0a]","bg-[#1a0010]","bg-[#5a0030]","bg-[#7a1a4a]","bg-[#c04080]",
+    "bg-[#4a4a00]","bg-[#1a1a00]","bg-[#0d0d00]","bg-[#b05020]","bg-[#1a72b8]",
+    "bg-[#2a6a10]","bg-[#3d7a10]","bg-[#2a2a00]","bg-[#0e2208]","bg-[#3a6a10]",
+    "bg-[#0a0a00]","bg-[#2a1a08]","bg-[#3a6020]","bg-[#4a4a00]","bg-[#1a1a00]",
+    "border-[#1a2e10]","border-[#2a4a18]","border-[#1e3010]","border-[#5aaa22]",
+    "border-[#7ada3a]","border-[#4a7a28]","border-[#3a1030]","border-[#c04080]",
+    "border-[#e060a0]","border-[#8a8a00]","border-[#4a4a00]","border-[#8a8a28]",
+    "text-[#c8e6a0]","text-[#dff0b0]","text-[#7aaa40]","text-[#a0d060]",
+    "text-[#5a7a30]","text-[#0a2000]","text-[#f0b0d0]","text-[#c070a0]",
+    "text-[#d4d060]","text-[#8a8a40]",
+  ]
 }
