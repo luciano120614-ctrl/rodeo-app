@@ -1,4 +1,17 @@
 import {useState,useEffect,useRef,useCallback} from "react";
+import { auth, db } from "./firebase";
+import { onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, sendPasswordResetEmail } from "firebase/auth";
+import { doc, getDoc, setDoc, onSnapshot } from "firebase/firestore";
+
+const flashStyle = `
+@keyframes btnPulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(0.97); }
+  100% { transform: scale(1); }
+}
+.btn-flash { transition: all 0.15s ease-out; }
+.btn-flash:active { animation: btnPulse 0.2s ease-out; opacity: 0.9; }
+`;
 
 // ── Constantes ────────────────────────────────────────────────────────────────
 const CATEGORIAS=["Ternero/a","Novillito","Novillo","Vaquillona","Vaca","Toro","Torito"];
@@ -35,6 +48,30 @@ function calcEdad(fechaNac){
   var mr=meses%12;
   return anios+" año"+(anios>1?"s":"")+(mr>0?" "+mr+" mes"+(mr>1?"es":""):"");
 }
+function mesesEdad(fechaNac){
+  if(!fechaNac)return null;
+  var hoyD=new Date();
+  var nac=new Date(fechaNac+"T12:00:00");
+  var dias=Math.floor((hoyD-nac)/86400000);
+  if(dias<0)return null;
+  return Math.floor(dias/30.4);
+}
+// Sugerir categoría según edad y sexo
+function sugerirCategoria(fechaNac,sexo){
+  var m=mesesEdad(fechaNac);
+  if(m===null)return null;
+  if(sexo==="Macho"){
+    if(m<10)return "Ternero/a";
+    if(m<18)return "Novillito";
+    return "Novillo";
+  }
+  if(sexo==="Hembra"){
+    if(m<10)return "Ternero/a";
+    if(m<24)return "Vaquillona";
+    return "Vaca";
+  }
+  return null;
+}
 function colorEmoji(c){
   if(c==="rojo")return "🔴";
   if(c==="amarillo")return "🟡";
@@ -42,18 +79,18 @@ function colorEmoji(c){
   return "🔵";
 }
 function marcaColor(c){
-  if(c==="rojo")return "bg-red-50 border-red-200 text-red-700";
-  if(c==="amarillo")return "bg-amber-50 border-amber-200 text-amber-700";
-  if(c==="verde")return "bg-green-50 border-green-200 text-green-700";
-  return "bg-blue-50 border-blue-200 text-blue-700";
+  if(c==="rojo")return "bg-red-800 border-red-600 text-red-200";
+  if(c==="amarillo")return "bg-amber-700 border-amber-500 text-amber-200";
+  if(c==="verde")return "bg-green-800 border-green-600 text-green-200";
+  return "bg-blue-800 border-blue-600 text-blue-200";
 }
 function marcaBgCard(marcas){
   if(!marcas||marcas.length===0)return "bg-white border-gray-200 hover:border-gray-300";
   var c=marcas[0].color;
-  if(c==="rojo")return "bg-red-50 border-red-200 hover:border-red-300";
-  if(c==="amarillo")return "bg-amber-50 border-amber-200 hover:border-amber-300";
-  if(c==="verde")return "bg-green-50 border-green-200 hover:border-green-300";
-  return "bg-blue-50 border-blue-200 hover:border-blue-300";
+  if(c==="rojo")return "bg-red-50 border-red-300 hover:border-red-400";
+  if(c==="amarillo")return "bg-amber-50 border-amber-300 hover:border-amber-500";
+  if(c==="verde")return "bg-green-50 border-green-300 hover:border-green-400";
+  return "bg-blue-50 border-blue-300 hover:border-blue-400";
 }
 function gdpTotal(pesajes){
   if(!pesajes||pesajes.length<2)return null;
@@ -89,6 +126,56 @@ function guardarStorage(clave,val){
   try{localStorage.setItem(clave,JSON.stringify(val));}catch(e){}
 }
 
+// ── Sync con Firestore ────────────────────────────────────────────────────────
+// Estrategia: un solo documento por usuario con todos sus datos.
+// Path: users/{uid}/data/main
+// - Al abrir: bajamos desde Firestore (si hay) o subimos desde localStorage (primera vez)
+// - Al cambiar: subimos a Firestore con debounce de 2 segundos
+
+var _syncTimeout=null;
+var _syncUid=null;
+var _syncEnabled=false;
+
+function refDatosUsuario(uid){
+  return doc(db,"usuarios",uid,"datos","principal");
+}
+
+// Sube los datos locales a Firestore (con debounce para no saturar)
+function sincronizarArriba(uid,datos){
+  if(!uid||!_syncEnabled)return;
+  if(_syncTimeout)clearTimeout(_syncTimeout);
+  _syncTimeout=setTimeout(function(){
+    setDoc(refDatosUsuario(uid),{
+      establecimientos:datos.establecimientos||[],
+      actualizado:new Date().toISOString()
+    }).catch(function(err){
+      console.error("Error sincronizando:",err);
+    });
+  },2000); // Espera 2 segundos desde el último cambio
+}
+
+// Activa el sync para un usuario
+function activarSync(uid){
+  _syncUid=uid;
+  _syncEnabled=true;
+}
+function desactivarSync(){
+  _syncEnabled=false;
+  _syncUid=null;
+  if(_syncTimeout){clearTimeout(_syncTimeout);_syncTimeout=null;}
+}
+
+// ── Log de Cambios ────────────────────────────────────────────────────────────
+function logCambio(tipo,texto,detalle){
+  try{
+    var logs=leerStorage("ganadera_cambios_v1",[]);
+    logs.unshift({id:Date.now()+Math.random(),tipo,texto,detalle:detalle||"",fecha:new Date().toISOString()});
+    // Límite de 500 entradas para no saturar
+    if(logs.length>500)logs=logs.slice(0,500);
+    guardarStorage("ganadera_cambios_v1",logs);
+  }catch(e){}
+}
+
 // ── Export ────────────────────────────────────────────────────────────────────
 function exportDatosRodeo(animales,nombre){
   var headers=["Caravana","Sexo","Categoría","Raza","F.Nacimiento","Edad","Último peso","GDP total","Obs"];
@@ -120,25 +207,25 @@ function exportDatosSesion(sesion,nombreLote){
 // ── UI base ───────────────────────────────────────────────────────────────────
 function Badge({text,color}){
   var cls="text-xs px-2 py-0.5 rounded-full font-semibold border ";
-  if(color==="macho")cls+="bg-blue-50 text-blue-700 border-blue-200";
-  else if(color==="hembra")cls+="bg-pink-50 text-pink-700 border-pink-200";
-  else cls+="bg-gray-50 text-gray-600 border-gray-200";
+  if(color==="macho")cls+="bg-blue-900 text-blue-300 border-blue-700";
+  else if(color==="hembra")cls+="bg-pink-900 text-pink-300 border-pink-700";
+  else cls+="bg-gray-100 text-gray-700 border-gray-200";
   return <span className={cls}>{text}</span>;
 }
 function Inp({label,className,value,onChange,type,placeholder,inputRef}){
   return(
     <div className={"flex flex-col gap-1 "+(className||"")}>
-      {label&&<label className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">{label}</label>}
+      {label&&<label className="text-[10px] text-green-600 font-bold uppercase tracking-wider">{label}</label>}
       <input ref={inputRef} type={type||"text"} value={value} onChange={onChange} placeholder={placeholder||""}
-        className="bg-white border border-gray-200 rounded-xl px-3 py-2.5 text-gray-900 text-sm focus:outline-none focus:border-gray-900 placeholder-gray-400"/>
+        style={{background:"#f9fafb"}} className=" border border-gray-200 rounded-xl px-3 py-2.5 text-gray-900 text-sm focus:outline-none focus:border-emerald-400 placeholder-gray-400"/>
     </div>
   );
 }
 function Sel({label,options,value,onChange}){
   return(
     <div className="flex flex-col gap-1">
-      {label&&<label className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">{label}</label>}
-      <select value={value} onChange={onChange} className="bg-white border border-gray-200 rounded-xl px-3 py-2.5 text-gray-900 text-sm focus:outline-none focus:border-gray-900">
+      {label&&<label className="text-[10px] text-green-600 font-bold uppercase tracking-wider">{label}</label>}
+      <select value={value} onChange={onChange} className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-gray-800 text-sm focus:outline-none focus:border-green-400">
         <option value="">— Elegir —</option>
         {options.map(function(o){return <option key={o} value={o}>{o}</option>;})}
       </select>
@@ -147,11 +234,11 @@ function Sel({label,options,value,onChange}){
 }
 function Modal({title,onClose,children}){
   return(
-    <div className="fixed inset-0 z-50 flex items-end justify-center" style={{background:"rgba(0,0,0,0.4)"}}>
-      <div className="w-full max-w-xl rounded-t-3xl flex flex-col shadow-2xl bg-white" style={{height:"95vh"}}>
+    <div className="fixed inset-0 z-50 flex items-end justify-center" style={{background:"rgba(0,0,0,0.5)"}}>
+      <div className="w-full max-w-xl rounded-t-3xl flex flex-col shadow-2xl" style={{height:"95vh",background:"#ffffff"}}>
         <div className="flex items-center justify-between px-5 pt-4 pb-3 shrink-0 border-b border-gray-100">
-          <h2 className="text-lg font-bold text-gray-900">{title}</h2>
-          <button onClick={onClose} className="bg-gray-100 hover:bg-gray-200 active:scale-95 text-gray-700 font-bold text-sm px-4 py-2 rounded-xl transition-all">✕</button>
+          <h2 className="text-lg font-black text-gray-800">{title}</h2>
+          <button onClick={onClose} className="bg-gray-100 hover:bg-gray-200 active:scale-95 text-gray-600 font-bold text-sm px-4 py-2 rounded-xl transition-all">✕</button>
         </div>
         <div className="overflow-y-auto px-5 pb-6" style={{flex:"1 1 0",minHeight:0}}>
           <div className="py-3">{children}</div>
@@ -164,12 +251,12 @@ function useConfirm(){
   var [state,setState]=useState(null);
   function ask(msg,onOk){setState({msg,onOk});}
   var dialog=state?(
-    <div className="fixed inset-0 z-[60] flex items-center justify-center px-4" style={{background:"rgba(0,0,0,0.5)"}}>
-      <div className="rounded-2xl p-6 flex flex-col gap-4 max-w-sm w-full bg-white shadow-2xl">
-        <p className="text-gray-900 font-semibold text-base text-center">{state.msg}</p>
+    <div className="fixed inset-0 z-[60] flex items-center justify-center" style={{background:"rgba(0,0,0,0.7)"}}>
+      <div className="mx-4 rounded-2xl p-6 flex flex-col gap-4 max-w-sm w-full" style={{background:"#74acdf"}}>
+        <p className="text-gray-800 font-bold text-base text-center">{state.msg}</p>
         <div className="flex gap-3">
           <button onClick={function(){setState(null);}} className="flex-1 py-2.5 rounded-xl bg-gray-100 text-gray-700 font-bold border border-gray-200">Cancelar</button>
-          <button onClick={function(){state.onOk();setState(null);}} className="flex-1 py-2.5 rounded-xl bg-red-600 text-white font-bold">Eliminar</button>
+          <button onClick={function(){state.onOk();setState(null);}} className="flex-1 py-2.5 rounded-xl bg-red-600 text-white font-bold border border-red-800">Eliminar</button>
         </div>
       </div>
     </div>
@@ -190,9 +277,9 @@ function ExportModal({titulo,headers,rows,onClose}){
   return(
     <Modal title={"📊 "+titulo} onClose={onClose}>
       <div className="flex flex-col gap-3">
-        <p className="text-sm text-gray-600">Copiá y pegá en Excel o Google Sheets</p>
-        <textarea readOnly value={txt} rows={6} className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-gray-700 text-xs font-mono focus:outline-none resize-none"/>
-        <button onClick={copiar} className={"w-full font-bold py-3 rounded-xl text-base transition-colors "+(copiado?"bg-emerald-600 text-white":"bg-gray-900 text-white active:bg-gray-700")}>
+        <p className="text-sm text-gray-400">Copiá y pegá en Excel o Google Sheets</p>
+        <textarea readOnly value={txt} rows={6} className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-gray-900 text-xs font-mono focus:outline-none resize-none"/>
+        <button onClick={copiar} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08)"}} className={"w-full font-bold py-3 rounded-xl text-base border-2 "+(copiado?"bg-green-600 border-green-400 text-white":"bg-emerald-600 border-emerald-400 text-white")}>
           {copiado?"✓ Copiado!":"📋 Copiar"}
         </button>
       </div>
@@ -214,12 +301,12 @@ function NuevoLoteModal({loteEditar,onClose,onSave}){
           placeholder="Ej: Campo Norte, Rodeo 1..."/>
         {!loteEditar&&(
           <div className="flex flex-col gap-2">
-            <label className="text-[10px] text-gray-500 font-bold uppercase">Tipo de lote</label>
+            <label className="text-[10px] text-green-600 font-bold uppercase">Tipo de lote</label>
             <div className="grid grid-cols-3 gap-2">
               {[["ganaderia","🐄","Ganadería"],["agricultura","🌾","Agricultura"],["mixto","🔄","Mixto"]].map(function(item){
                 return(
                   <button key={item[0]} onClick={function(){setTipo(item[0]);}}
-                    className={"flex flex-col items-center py-3 rounded-xl border-2 text-xs font-bold transition-all "+(tipo===item[0]?"bg-gray-900 border-gray-900 text-white":"bg-white border-gray-200 text-gray-600")}>
+                    className={"flex flex-col items-center py-3 rounded-xl border-2 text-xs font-bold transition-all "+(tipo===item[0]?"bg-emerald-100 border-emerald-400 text-gray-900":"bg-gray-50 border-gray-200 text-gray-400")}>
                     <span className="text-2xl mb-1">{item[1]}</span>{item[2]}
                   </button>
                 );
@@ -227,7 +314,7 @@ function NuevoLoteModal({loteEditar,onClose,onSave}){
             </div>
           </div>
         )}
-        <button onClick={save} className="w-full bg-gray-900 active:bg-gray-700 text-white font-bold py-3 rounded-xl transition-colors">
+        <button onClick={save} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08)"}} className="w-full bg-emerald-600 text-white font-black py-3 rounded-xl border border-emerald-500">
           {loteEditar?"Guardar":"Crear Lote"}
         </button>
       </div>
@@ -263,11 +350,11 @@ function NuevoAnimalModal({onClose,onSave,caravanaInicial}){
           <Inp label="Fecha peso" type="date" value={f.fecha} onChange={function(e){set("fecha",e.target.value);}}/>
         </div>
         <div className="flex flex-col gap-1">
-          <label className="text-[10px] text-gray-500 font-bold uppercase">Observaciones</label>
+          <label className="text-[10px] text-green-600 font-bold uppercase">Observaciones</label>
           <textarea rows={2} value={f.obs} onChange={function(e){set("obs",e.target.value);}} placeholder="Notas sobre el animal..."
-            className="bg-white border border-gray-200 rounded-xl px-3 py-2 text-gray-900 text-sm focus:outline-none focus:border-gray-900 resize-none placeholder-gray-400"/>
+            className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-gray-800 text-sm focus:outline-none focus:border-green-400 resize-none"/>
         </div>
-        <button onClick={guardar} className="w-full bg-gray-900 active:bg-gray-700 text-white font-bold py-3 rounded-xl transition-colors">
+        <button onClick={guardar} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08)"}} className="w-full bg-emerald-600 text-white font-black py-3 rounded-xl border border-emerald-500">
           Guardar Animal
         </button>
       </div>
@@ -282,31 +369,31 @@ function MarcaForm({onAdd}){
   var [motivo,setMotivo]=useState("");
   var [custom,setCustom]=useState("");
   if(!show)return(
-    <button onClick={function(){setShow(true);}} className="text-xs text-gray-700 border border-gray-200 bg-white py-2 px-3 rounded-xl font-medium">+ Agregar marca</button>
+    <button onClick={function(){setShow(true);}} className="text-xs text-gray-700 border border-gray-200 py-2 px-3 rounded-xl">+ Agregar marca</button>
   );
   return(
     <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 flex flex-col gap-2">
       <div className="flex gap-1">
         {MARCAS_COLORES.map(function(c){
           var active=color===c.k;
-          var cls="flex-1 py-1.5 rounded-lg text-sm font-bold border "+(active?marcaColor(c.k):"bg-white border-gray-200 text-gray-400");
+          var cls="flex-1 py-1.5 rounded-lg text-sm font-bold border "+(active?marcaColor(c.k)+" border":"bg-gray-50 border-gray-200 text-gray-400");
           return <button key={c.k} onClick={function(){setColor(c.k);}} className={cls}>{colorEmoji(c.k)}</button>;
         })}
       </div>
-      <select value={motivo} onChange={function(e){setMotivo(e.target.value);}} className="bg-white border border-gray-200 rounded-xl px-3 py-2 text-gray-900 text-sm focus:outline-none focus:border-gray-900">
+      <select value={motivo} onChange={function(e){setMotivo(e.target.value);}} style={{background:"#f9fafb"}} className=" border border-gray-200 rounded-xl px-3 py-2 text-gray-900 text-sm focus:outline-none">
         <option value="">— Motivo —</option>
         {MARCAS_MOTIVOS.map(function(m){return <option key={m} value={m}>{m}</option>;})}
         <option value="__otro">✏️ Otro</option>
       </select>
-      {motivo==="__otro"&&<input value={custom} onChange={function(e){setCustom(e.target.value);}} onKeyDown={function(e){if(e.key==="Enter"&&custom.trim()){onAdd({id:Date.now(),color,motivo:custom.trim()});setShow(false);setMotivo("");setCustom("");setColor("rojo");}}} placeholder="Escribí el motivo..." autoFocus className="bg-white border border-gray-200 rounded-xl px-3 py-2 text-gray-900 text-sm focus:outline-none focus:border-gray-900"/>}
+      {motivo==="__otro"&&<input value={custom} onChange={function(e){setCustom(e.target.value);}} onKeyDown={function(e){if(e.key==="Enter"&&custom.trim()){onAdd({id:Date.now(),color,motivo:custom.trim()});setShow(false);setMotivo("");setCustom("");setColor("rojo");}}} placeholder="Escribí el motivo..." autoFocus style={{background:"#f9fafb"}} className=" border border-gray-200 rounded-xl px-3 py-2 text-gray-900 text-sm focus:outline-none"/>}
       <div className="flex gap-2">
-        <button onClick={function(){setShow(false);}} className="flex-1 py-1.5 rounded-xl border border-gray-200 bg-white text-gray-600 text-xs font-medium">Cancelar</button>
+        <button onClick={function(){setShow(false);}} className="flex-1 py-1.5 rounded-xl border border-gray-200 text-gray-500 text-xs">Cancelar</button>
         <button onClick={function(){
           var m=motivo==="__otro"?custom.trim():motivo;
           if(!m)return;
           onAdd({id:Date.now(),color,motivo:m});
           setShow(false);setMotivo("");setCustom("");setColor("rojo");
-        }} className="flex-1 py-1.5 rounded-xl bg-gray-900 text-white font-bold text-xs">Guardar</button>
+        }} className="flex-1 py-1.5 rounded-xl bg-emerald-600 text-gray-900 font-bold text-xs border border-emerald-400">Guardar</button>
       </div>
     </div>
   );
@@ -323,8 +410,10 @@ function DetalleModal({animal,onClose,onUpdate,onDelete,lotes,loteActualId,estab
   var [showMoverEst,setShowMoverEst]=useState(false);
   var [estDestino,setEstDestino]=useState("");
   var [loteEnEst,setLoteEnEst]=useState("");
+  var [formSan,setFormSan]=useState({tipo:"Vacuna",nombre:"",fecha:hoy(),proxima:"",obs:""});
   var [ask,confirmDialog]=useConfirm();
   var pesoRef=useRef();
+  var sanidad=animal.sanidad||[];
   var sorted=[...(animal.pesajes||[])].sort(function(a,b){return new Date(b.fecha)-new Date(a.fecha);});
   var up=ultimoPeso(animal.pesajes);
   var g=gdpTotal(animal.pesajes);
@@ -338,14 +427,22 @@ function DetalleModal({animal,onClose,onUpdate,onDelete,lotes,loteActualId,estab
     if(pesoRef.current)pesoRef.current.focus();
   }
 
+  var infoData=[
+    ["Sexo",animal.sexo],["Categoría",animal.categoria],["Raza",animal.raza||"—"],
+    ["F. Nacimiento",animal.fechaNac?fmtFecha(animal.fechaNac):"—"],
+    ["Edad",animal.fechaNac?calcEdad(animal.fechaNac)||"—":"—"],
+    ["Último peso",up?up+" kg":"—"],
+    ["GDP total",g!==null?g+" kg/d":"—"]
+  ];
+
   return(
     <Modal title={"Caravana "+animal.caravana} onClose={onClose}>
       <div className="flex gap-1 mb-3 bg-gray-100 rounded-xl p-1">
-        {["info","pesajes"].map(function(t){
+        {["info","pesajes","sanidad"].map(function(t){
           return(
             <button key={t} onClick={function(){setTab(t);}}
-              className={"flex-1 py-2.5 rounded-lg text-sm font-bold tracking-wider transition-all "+(tab===t?"bg-white text-gray-900 shadow-sm":"text-gray-500")}>
-              {t==="info"?"📋 Info":"⚖️ Pesajes"}
+              className={"flex-1 py-2.5 rounded-xl text-xs font-bold tracking-wider transition-all "+(tab===t?"bg-white text-gray-900 shadow-sm":"text-gray-500")}>
+              {t==="info"?"📋 Info":t==="pesajes"?"⚖️ Pesajes":"💉 Sanidad"}
             </button>
           );
         })}
@@ -353,6 +450,21 @@ function DetalleModal({animal,onClose,onUpdate,onDelete,lotes,loteActualId,estab
 
       {tab==="info"&&(
         <div className="flex flex-col gap-2">
+          {/* Sugerencia cambio categoría por edad */}
+          {(function(){
+            var sug=sugerirCategoria(animal.fechaNac,animal.sexo);
+            if(!sug||sug===animal.categoria)return null;
+            return(
+              <div className="bg-sky-50 border border-sky-200 rounded-xl px-3 py-2 flex items-center justify-between gap-2">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sky-800 font-bold text-sm">💡 Cambió de categoría</p>
+                  <p className="text-sky-700 text-xs">Por su edad ya es <span className="font-bold">{sug}</span> (estaba como {animal.categoria})</p>
+                </div>
+                <button onClick={function(){onUpdate(Object.assign({},animal,{categoria:sug}));}} className="bg-sky-500 text-white font-bold px-3 py-2 rounded-xl text-xs shrink-0">Actualizar</button>
+              </div>
+            );
+          })()}
+
           {/* Stats compactos en 2 filas */}
           <div className="grid grid-cols-3 gap-1.5">
             {[["Sexo",animal.sexo],["Categoría",animal.categoria],["Raza",animal.raza||"—"],
@@ -362,8 +474,8 @@ function DetalleModal({animal,onClose,onUpdate,onDelete,lotes,loteActualId,estab
             ].map(function(item){
               return(
                 <div key={item[0]} className="bg-gray-50 border border-gray-200 rounded-xl px-2 py-2 text-center">
-                  <p className="text-[9px] text-gray-500 uppercase font-bold mb-0.5">{item[0]}</p>
-                  <p className="text-gray-900 font-bold text-xs leading-tight">{item[1]}</p>
+                  <p className="text-[9px] text-green-600 uppercase font-bold mb-0.5">{item[0]}</p>
+                  <p className="text-gray-800 font-bold text-xs leading-tight">{item[1]}</p>
                 </div>
               );
             })}
@@ -371,25 +483,25 @@ function DetalleModal({animal,onClose,onUpdate,onDelete,lotes,loteActualId,estab
 
           {/* GDP si existe */}
           {g!==null&&(
-            <div className={"rounded-xl px-3 py-2 text-center border "+(parseFloat(g)>=0?"bg-emerald-50 border-emerald-200":"bg-red-50 border-red-200")}>
-              <p className="text-[9px] uppercase font-bold text-gray-500 mb-0.5">GDP total</p>
-              <p className={"font-black text-base "+(parseFloat(g)>=0?"text-emerald-700":"text-red-700")}>{g+" kg/d"}</p>
+            <div className={"rounded-xl px-3 py-2 text-center border "+(parseFloat(g)>=0?"bg-green-900/30 border-green-700":"bg-red-900/30 border-red-700")}>
+              <p className="text-[9px] uppercase font-bold text-gray-700 mb-0.5">GDP total</p>
+              <p className={"font-black text-base "+(parseFloat(g)>=0?"text-green-300":"text-red-300")}>{g+" kg/d"}</p>
             </div>
           )}
 
           {/* Obs */}
           <div className="flex flex-col gap-1">
-            <label className="text-[10px] text-gray-500 font-bold uppercase">Observaciones</label>
+            <label className="text-[10px] text-emerald-700 font-bold uppercase">Observaciones</label>
             <div className="flex gap-2">
               <textarea rows={2} value={obs} onChange={function(e){setObs(e.target.value);}}
-                className="flex-1 bg-white border border-gray-200 rounded-xl px-3 py-2 text-gray-900 text-sm focus:outline-none focus:border-gray-900 resize-none"/>
-              <button onClick={function(){onUpdate(Object.assign({},animal,{obs}));}} className="self-end text-xs bg-gray-900 text-white px-3 py-2 rounded-lg font-bold">💾</button>
+                className="flex-1 bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-gray-800 text-sm focus:outline-none focus:border-green-400 resize-none"/>
+              <button onClick={function(){onUpdate(Object.assign({},animal,{obs}));}} className="self-end text-xs bg-green-100 text-green-700 border border-green-300 px-3 py-2 rounded-lg font-bold">💾</button>
             </div>
           </div>
 
           {/* Marcas */}
           <div className="flex flex-col gap-1.5">
-            <p className="text-[10px] text-gray-500 font-bold uppercase">🏷️ Marcas</p>
+            <p className="text-[10px] text-green-600 font-bold uppercase">🏷️ Marcas</p>
             <div className="flex flex-wrap gap-1">
               {(animal.marcas||[]).map(function(m){
                 return(
@@ -406,42 +518,42 @@ function DetalleModal({animal,onClose,onUpdate,onDelete,lotes,loteActualId,estab
           {/* Acciones */}
           <div className="flex flex-col gap-1.5 border-t border-gray-100 pt-2">
             {otrosLotes.length>0&&!showMover&&(
-              <button onClick={function(){setShowMover(true);}} className="w-full text-sm text-blue-700 border border-blue-200 bg-blue-50 py-2 rounded-xl font-medium">🔀 Mover a otro lote</button>
+              <button onClick={function(){setShowMover(true);}} className="w-full text-sm text-blue-600 border border-blue-200 bg-blue-50 py-2 rounded-xl font-medium">🔀 Mover a otro lote</button>
             )}
             {showMover&&(
               <div className="flex flex-col gap-1.5">
-                <select value={loteDestino} onChange={function(e){setLoteDestino(e.target.value);}} className="bg-white border border-gray-200 rounded-xl px-3 py-2 text-gray-900 text-sm focus:outline-none focus:border-gray-900">
+                <select value={loteDestino} onChange={function(e){setLoteDestino(e.target.value);}} style={{background:"#ecfdf5"}} className=" border border-emerald-400 rounded-xl px-3 py-2 text-gray-900 text-sm focus:outline-none">
                   <option value="">— Elegir lote —</option>
                   {otrosLotes.map(function(l){return <option key={l.id} value={l.id}>{l.nombre}</option>;})}
                 </select>
                 <div className="flex gap-2">
-                  <button onClick={function(){setShowMover(false);}} className="flex-1 text-sm text-gray-600 border border-gray-200 bg-white py-2 rounded-xl">Cancelar</button>
-                  <button onClick={function(){if(!loteDestino)return;onUpdate(Object.assign({},animal,{_moverA:loteDestino}));onClose();}} className="flex-1 bg-blue-600 text-white font-bold py-2 rounded-xl text-sm">Confirmar</button>
+                  <button onClick={function(){setShowMover(false);}} className="flex-1 text-sm text-gray-500 border border-gray-200 py-2 rounded-xl">Cancelar</button>
+                  <button onClick={function(){if(!loteDestino)return;onUpdate(Object.assign({},animal,{_moverA:loteDestino}));onClose();}} className="flex-1 bg-blue-500 text-white font-bold py-2 rounded-xl text-sm">Confirmar</button>
                 </div>
               </div>
             )}
             {establecimientos&&establecimientos.length>1&&!showMoverEst&&(
-              <button onClick={function(){setShowMoverEst(true);}} className="w-full text-sm text-orange-700 border border-orange-200 bg-orange-50 py-2 rounded-xl font-medium">🏡 Mover a otro establecimiento</button>
+              <button onClick={function(){setShowMoverEst(true);}} className="w-full text-sm text-orange-600 border border-orange-200 bg-orange-50 py-2 rounded-xl font-medium">🏡 Mover a otro establecimiento</button>
             )}
             {showMoverEst&&(
               <div className="flex flex-col gap-1.5">
-                <select value={estDestino} onChange={function(e){setEstDestino(e.target.value);setLoteEnEst("");}} className="bg-white border border-gray-200 rounded-xl px-3 py-2 text-gray-900 text-sm focus:outline-none focus:border-gray-900">
+                <select value={estDestino} onChange={function(e){setEstDestino(e.target.value);setLoteEnEst("");}} className="bg-amber-50 border border-orange-300 rounded-xl px-3 py-2 text-orange-700 text-sm focus:outline-none">
                   <option value="">— Establecimiento —</option>
                   {establecimientos.filter(function(e){return e.id!==estId;}).map(function(e){return <option key={e.id} value={e.id}>{e.nombre}</option>;})}
                 </select>
                 {estDestinoObj&&(
-                  <select value={loteEnEst} onChange={function(e){setLoteEnEst(e.target.value);}} className="bg-white border border-gray-200 rounded-xl px-3 py-2 text-gray-900 text-sm focus:outline-none focus:border-gray-900">
+                  <select value={loteEnEst} onChange={function(e){setLoteEnEst(e.target.value);}} className="bg-amber-50 border border-orange-300 rounded-xl px-3 py-2 text-orange-700 text-sm focus:outline-none">
                     <option value="">— Lote destino —</option>
                     {(estDestinoObj.lotes||[]).map(function(l){return <option key={l.id} value={l.id}>{l.nombre}</option>;})}
                   </select>
                 )}
                 <div className="flex gap-2">
-                  <button onClick={function(){setShowMoverEst(false);}} className="flex-1 text-sm text-gray-600 border border-gray-200 bg-white py-2 rounded-xl">Cancelar</button>
-                  <button onClick={function(){if(!estDestino||!loteEnEst)return;onMoverEst&&onMoverEst(parseInt(estDestino),parseInt(loteEnEst));onClose();}} className="flex-1 bg-orange-600 text-white font-bold py-2 rounded-xl text-sm">Confirmar</button>
+                  <button onClick={function(){setShowMoverEst(false);}} className="flex-1 text-sm text-gray-500 border border-gray-200 py-2 rounded-xl">Cancelar</button>
+                  <button onClick={function(){if(!estDestino||!loteEnEst)return;onMoverEst&&onMoverEst(parseInt(estDestino),parseInt(loteEnEst));onClose();}} className="flex-1 bg-orange-500 text-white font-bold py-2 rounded-xl text-sm">Confirmar</button>
                 </div>
               </div>
             )}
-            <button onClick={function(){ask("¿Eliminar este animal?",function(){onDelete(animal.id);onClose();});}} className="self-start text-xs text-red-600 border border-red-200 bg-red-50 px-3 py-1.5 rounded-lg font-medium">🗑 Eliminar</button>
+            <button onClick={function(){ask("¿Eliminar este animal?",function(){onDelete(animal.id);onClose();});}} className="self-start text-xs text-red-400 border border-red-700 px-3 py-1.5 rounded-lg">🗑 Eliminar</button>
           </div>
         </div>
       )}
@@ -451,19 +563,77 @@ function DetalleModal({animal,onClose,onUpdate,onDelete,lotes,loteActualId,estab
           <div className="flex gap-2">
             <input ref={pesoRef} type="number" inputMode="decimal" value={peso} onChange={function(e){setPeso(e.target.value);}}
               onKeyDown={function(e){if(e.key==="Enter")addPeso();}}
-              placeholder="kg" className="flex-1 bg-white border border-gray-200 rounded-xl px-3 py-2.5 text-gray-900 text-sm focus:outline-none focus:border-gray-900"/>
-            <input type="date" value={fecha} onChange={function(e){setFecha(e.target.value);}} className="bg-white border border-gray-200 rounded-xl px-3 py-2.5 text-gray-900 text-sm focus:outline-none focus:border-gray-900"/>
+              placeholder="kg" className="flex-1 bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-gray-800 text-sm focus:outline-none focus:border-green-400"/>
+            <input type="date" value={fecha} onChange={function(e){setFecha(e.target.value);}} className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-gray-800 text-sm focus:outline-none focus:border-green-400"/>
           </div>
-          <button onClick={addPeso} className="w-full bg-gray-900 active:bg-gray-700 text-white font-bold py-2.5 rounded-xl transition-colors">+ Agregar pesaje</button>
+          <button onClick={addPeso} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08)"}} className="w-full bg-emerald-600 text-white font-black py-2.5 rounded-xl border border-emerald-500">+ Agregar pesaje</button>
           <div className="flex flex-col gap-1.5 max-h-48 overflow-y-auto">
             {sorted.map(function(p){
               return(
-                <div key={p.id} className="flex items-center justify-between bg-gray-50 border border-gray-200 rounded-xl px-4 py-2">
+                <div key={p.id} className="flex items-center justify-between bg-gray-50 border border-gray-100 rounded-xl px-4 py-2">
                   <div>
-                    <p className="text-gray-900 font-bold">{p.peso+" kg"}</p>
-                    <p className="text-gray-500 text-xs">{fmtFecha(p.fecha)}</p>
+                    <p className="text-gray-800 font-bold">{p.peso+" kg"}</p>
+                    <p className="text-green-600 text-xs">{fmtFecha(p.fecha)}</p>
                   </div>
                   <button onClick={function(){onUpdate(Object.assign({},animal,{pesajes:(animal.pesajes||[]).filter(function(x){return x.id!==p.id;})}));}} className="text-red-500 text-lg">✕</button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      {tab==="sanidad"&&(
+        <div className="flex flex-col gap-3">
+          <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 flex flex-col gap-2">
+            <p className="text-xs font-black text-gray-500 uppercase">+ Nuevo registro</p>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] text-gray-500 font-bold uppercase">Tipo</label>
+                <select value={formSan.tipo} onChange={function(e){setFormSan(Object.assign({},formSan,{tipo:e.target.value}));}} className="bg-white border border-gray-200 rounded-xl px-2 py-2 text-gray-900 text-sm focus:outline-none">
+                  <option>Vacuna</option>
+                  <option>Desparasitación</option>
+                  <option>Tratamiento</option>
+                  <option>Revisión</option>
+                  <option>Otro</option>
+                </select>
+              </div>
+              <Inp label="Nombre/Descripción" placeholder="Ej: Aftosa, Ivermectina..." value={formSan.nombre} onChange={function(e){setFormSan(Object.assign({},formSan,{nombre:e.target.value}));}}/>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <Inp label="Fecha" type="date" value={formSan.fecha} onChange={function(e){setFormSan(Object.assign({},formSan,{fecha:e.target.value}));}}/>
+              <Inp label="Próxima dosis" type="date" value={formSan.proxima} onChange={function(e){setFormSan(Object.assign({},formSan,{proxima:e.target.value}));}}/>
+            </div>
+            <Inp label="Observaciones" placeholder="Opcional" value={formSan.obs} onChange={function(e){setFormSan(Object.assign({},formSan,{obs:e.target.value}));}}/>
+            <button onClick={function(){
+              if(!formSan.nombre.trim())return;
+              var reg=Object.assign({id:Date.now()},formSan);
+              onUpdate(Object.assign({},animal,{sanidad:[...sanidad,reg]}));
+              setFormSan({tipo:"Vacuna",nombre:"",fecha:hoy(),proxima:"",obs:""});
+            }} className="w-full bg-emerald-500 text-white font-bold py-2.5 rounded-xl text-sm border border-emerald-500">Guardar</button>
+          </div>
+
+          {sanidad.length===0&&<div className="text-center py-6 text-gray-400"><p className="text-3xl mb-1">💉</p><p className="text-xs">Sin registros sanitarios</p></div>}
+          <div className="flex flex-col gap-1.5 max-h-64 overflow-y-auto">
+            {[...sanidad].sort(function(a,b){return b.fecha.localeCompare(a.fecha);}).map(function(r){
+              var vence=null;
+              if(r.proxima){
+                var dif=Math.floor((new Date(r.proxima+"T12:00:00")-new Date())/86400000);
+                if(dif<0)vence={label:"Vencida hace "+Math.abs(dif)+"d",cls:"bg-red-50 text-red-700 border-red-200"};
+                else if(dif<=7)vence={label:"Vence en "+dif+"d",cls:"bg-amber-50 text-amber-700 border-amber-200"};
+                else vence={label:"Vence "+fmtFecha(r.proxima),cls:"bg-gray-50 text-gray-600 border-gray-200"};
+              }
+              var iconTipo=r.tipo==="Vacuna"?"💉":r.tipo==="Desparasitación"?"🪱":r.tipo==="Tratamiento"?"💊":r.tipo==="Revisión"?"🔍":"📋";
+              return(
+                <div key={r.id} className="bg-white border border-gray-200 rounded-xl px-3 py-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-gray-900 font-bold text-sm">{iconTipo} {r.nombre}</p>
+                      <p className="text-gray-500 text-xs">{r.tipo+" · "+fmtFecha(r.fecha)}</p>
+                      {r.obs&&<p className="text-gray-600 text-xs mt-0.5">{r.obs}</p>}
+                      {vence&&<span className={"inline-block mt-1 text-[10px] px-2 py-0.5 rounded-full border font-bold "+vence.cls}>{vence.label}</span>}
+                    </div>
+                    <button onClick={function(){ask("¿Eliminar este registro?",function(){onUpdate(Object.assign({},animal,{sanidad:sanidad.filter(function(x){return x.id!==r.id;})}));});}} className="text-red-500 text-lg shrink-0">✕</button>
+                  </div>
                 </div>
               );
             })}
@@ -479,10 +649,15 @@ function DetalleModal({animal,onClose,onUpdate,onDelete,lotes,loteActualId,estab
 function SesionPesaje({loteId,allLotes,setLotes,nombreLote,sesionInicial,onPausar,onFinalizar}){
   var [log,setLog]=useState(sesionInicial?sesionInicial.registros:[]);
   var [fecha]=useState(sesionInicial?sesionInicial.fecha:hoy());
+  var [nota,setNota]=useState(sesionInicial&&sesionInicial.nota?sesionInicial.nota:"");
+  var [showNota,setShowNota]=useState(false);
   var [busq,setBusq]=useState("");
   var [encontrado,setEncontrado]=useState(null);
   var [peso,setPeso]=useState("");
   var [flash,setFlash]=useState(false);
+  var [showFaltantes,setShowFaltantes]=useState(false);
+  var [editandoId,setEditandoId]=useState(null);
+  var [pesoEdit,setPesoEdit]=useState("");
   var busqRef=useRef();
   var pesoRef=useRef();
   useEffect(function(){if(busqRef.current)busqRef.current.focus();},[]);
@@ -529,30 +704,97 @@ function SesionPesaje({loteId,allLotes,setLotes,nombreLote,sesionInicial,onPausa
   var maxPeso=log.length>0?log.reduce(function(m,r){return r.peso>m.peso?r:m;},log[0]):null;
   var minPeso=log.length>0?log.reduce(function(m,r){return r.peso<m.peso?r:m;},log[0]):null;
 
+  // Animales del lote que aún no fueron pesados en esta sesión
+  var faltantes=animalesActuales.filter(function(a){
+    return !log.some(function(r){return r.caravana===a.caravana;});
+  });
+
+  function iniciarEdicion(r){
+    setEditandoId(r.id);
+    setPesoEdit(String(r.peso));
+  }
+
+  function guardarEdicion(r){
+    var nuevoPeso=parseFloat(pesoEdit);
+    if(isNaN(nuevoPeso)||nuevoPeso<=0){setEditandoId(null);return;}
+    // Actualizar log
+    setLog(function(prev){return prev.map(function(x){
+      if(x.id!==r.id)return x;
+      // Recalcular kg ganados usando el animal original
+      var anim=animalesActuales.find(function(a){return a.caravana===r.caravana;});
+      var pesajesAnt=anim?(anim.pesajes||[]).filter(function(p){return p.fecha!==fecha;}):[];
+      var upAnt=pesajesAnt.length>0?[...pesajesAnt].sort(function(a,b){return new Date(b.fecha)-new Date(a.fecha);})[0].peso:null;
+      var kgGan=upAnt!==null?parseFloat((nuevoPeso-upAnt).toFixed(1)):null;
+      return Object.assign({},x,{peso:nuevoPeso,kgGanados:kgGan});
+    });});
+    // Actualizar el pesaje en el animal (en el lote)
+    setLotes(function(prev){
+      return prev.map(function(l){
+        if(l.id!==loteId)return l;
+        return Object.assign({},l,{animales:l.animales.map(function(a){
+          if(a.caravana!==r.caravana)return a;
+          return Object.assign({},a,{pesajes:(a.pesajes||[]).map(function(p){
+            if(p.fecha===fecha)return Object.assign({},p,{peso:nuevoPeso});
+            return p;
+          })});
+        })});
+      });
+    });
+    setEditandoId(null);
+    setPesoEdit("");
+  }
+
+  function eliminarDelLog(r){
+    setLog(function(prev){return prev.filter(function(x){return x.id!==r.id;});});
+    // Eliminar el pesaje del animal
+    setLotes(function(prev){
+      return prev.map(function(l){
+        if(l.id!==loteId)return l;
+        return Object.assign({},l,{animales:l.animales.map(function(a){
+          if(a.caravana!==r.caravana)return a;
+          return Object.assign({},a,{pesajes:(a.pesajes||[]).filter(function(p){return p.fecha!==fecha;})});
+        })});
+      });
+    });
+  }
+
   return(
-    <div className="fixed inset-0 z-40 flex flex-col bg-white">
+    <div className="fixed inset-0 z-40 flex flex-col" style={{background:"#ffffff"}}>
+      <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700;900&display=swap" rel="stylesheet"/>
       {/* Header */}
-      <div className="px-4 py-3 shrink-0 bg-white border-b border-gray-200">
+      <div className="px-4 py-2 shrink-0 bg-white border-b border-gray-200">
         <div className="flex items-center justify-between">
           <div>
             <p className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">{"Manga · "+nombreLote}</p>
             <h2 className="text-lg font-bold text-gray-900">{"Sesión "+fmtFecha(fecha)}</h2>
           </div>
           <div className="flex gap-2">
-            <button onClick={function(){onPausar({fecha,registros:[...log].reverse()});}} className="border border-gray-200 bg-white text-gray-700 font-bold px-3 py-1.5 rounded-xl text-xs">⏸ Pausar</button>
-            <button onClick={function(){onFinalizar({fecha,registros:[...log].reverse()});}} className="bg-red-600 active:bg-red-700 text-white font-bold px-4 py-1.5 rounded-xl text-sm transition-colors">FIN</button>
+            <button onClick={function(){setShowNota(function(v){return !v;});}} className={"border font-bold px-3 py-1.5 rounded-xl text-xs "+(nota?"bg-sky-50 border-sky-300 text-sky-700":"bg-white border-gray-200 text-gray-600")} title="Agregar nota">📝{nota?" •":""}</button>
+            <button onClick={function(){onPausar({fecha,registros:[...log].reverse(),nota});}} className="bg-white border border-gray-200 text-gray-700 font-bold px-3 py-1.5 rounded-xl text-xs">⏸ Pausar</button>
+            <button onClick={function(){onFinalizar({fecha,registros:[...log].reverse(),nota});}} style={{boxShadow:"0 1px 2px rgba(0,0,0,0.1)"}} className="btn-flash bg-red-500 text-white font-black px-4 py-1.5 rounded-xl text-sm border border-red-500">FIN</button>
           </div>
         </div>
+        {showNota&&(
+          <div className="mt-2 pb-1">
+            <textarea value={nota} onChange={function(e){setNota(e.target.value);}} rows={2} placeholder="Ej: lluvia, balanza descalibrada +2kg, se escapó uno..."
+              className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-gray-900 text-sm focus:outline-none focus:border-gray-900 resize-none placeholder-gray-400"/>
+          </div>
+        )}
       </div>
       {/* Stats bar */}
-      {log.length>0&&(
-        <div className="px-4 py-2 shrink-0 flex gap-4 overflow-x-auto bg-gray-50 border-b border-gray-200">
-          <div className="flex items-center gap-1.5 shrink-0"><span className="text-[10px] text-gray-500 uppercase">Pesados:</span><span className="text-gray-900 font-bold text-sm">{log.length}</span></div>
-          <div className="flex items-center gap-1.5 shrink-0"><span className="text-[10px] text-gray-500 uppercase">Total kg:</span><span className="text-gray-900 font-bold text-sm">{totalKg.toLocaleString("es-AR")}</span></div>
-          {kgGanTotal!==0&&<div className="flex items-center gap-1.5 shrink-0"><span className="text-[10px] text-gray-500 uppercase">Ganados:</span><span className={"font-bold text-sm "+(kgGanTotal>=0?"text-emerald-600":"text-red-600")}>{(kgGanTotal>0?"+":"")+kgGanTotal.toFixed(1)+" kg"}</span></div>}
-          {maxPeso&&<div className="flex items-center gap-1.5 shrink-0"><span className="text-[10px] text-gray-500 uppercase">Max:</span><span className="text-gray-900 font-bold text-sm">{maxPeso.caravana+" "+maxPeso.peso+"kg"}</span></div>}
-        </div>
-      )}
+      <div className="px-4 py-2 shrink-0 flex gap-4 overflow-x-auto bg-gray-50 border-b border-gray-200">
+        <div className="flex items-center gap-1.5 shrink-0"><span className="text-[10px] text-gray-500 uppercase">Pesados:</span><span className="text-gray-900 font-bold text-sm">{log.length}</span></div>
+        {faltantes.length>0&&(
+          <button onClick={function(){setShowFaltantes(true);}} className="flex items-center gap-1.5 shrink-0 bg-amber-100 border border-amber-300 px-2 py-0.5 rounded-lg">
+            <span className="text-[10px] text-amber-700 uppercase font-bold">Falta:</span>
+            <span className="text-amber-800 font-bold text-sm">{faltantes.length}</span>
+            <span className="text-amber-700 text-xs underline">Ver</span>
+          </button>
+        )}
+        {log.length>0&&<div className="flex items-center gap-1.5 shrink-0"><span className="text-[10px] text-gray-500 uppercase">Total kg:</span><span className="text-gray-900 font-bold text-sm">{totalKg.toLocaleString("es-AR")}</span></div>}
+        {kgGanTotal!==0&&<div className="flex items-center gap-1.5 shrink-0"><span className="text-[10px] text-gray-500 uppercase">Ganados:</span><span className={"font-bold text-sm "+(kgGanTotal>=0?"text-emerald-600":"text-red-500")}>{(kgGanTotal>0?"+":"")+kgGanTotal.toFixed(1)+" kg"}</span></div>}
+        {maxPeso&&<div className="flex items-center gap-1.5 shrink-0"><span className="text-[10px] text-gray-500 uppercase">Max:</span><span className="text-gray-900 font-bold text-sm">{maxPeso.caravana+" "+maxPeso.peso+"kg"}</span></div>}
+      </div>
       {/* Main */}
       <div className="flex-1 overflow-y-auto flex flex-col">
         <div className="px-4 pt-4 pb-3">
@@ -561,7 +803,7 @@ function SesionPesaje({loteId,allLotes,setLotes,nombreLote,sesionInicial,onPausa
             onChange={function(e){setBusq(e.target.value);buscar(e.target.value);}}
             onKeyDown={function(e){if(e.key==="Enter"){if(encontrado&&!yaRegistrado&&peso)registrar();else buscar(busq);}}}
             placeholder="N° caravana..." autoComplete="off" autoCorrect="off" autoCapitalize="characters" spellCheck="false"
-            className={"w-full border-2 rounded-2xl px-4 py-4 text-2xl font-bold tracking-widest focus:outline-none transition-colors "+(flash?"bg-emerald-50 border-emerald-500 text-emerald-700":"bg-white border-gray-200 focus:border-gray-900 text-gray-900 placeholder-gray-300")}/>
+            className={"w-full border-2 rounded-2xl px-4 py-4 text-2xl font-bold tracking-widest focus:outline-none transition-colors "+(flash?"bg-green-900 border-green-500 text-green-200":"bg-gray-50 border-gray-200 focus:border-emerald-400 text-gray-900 placeholder-gray-400")}/>
 
           {/* Animal encontrado */}
           {encontrado&&(
@@ -575,11 +817,20 @@ function SesionPesaje({loteId,allLotes,setLotes,nombreLote,sesionInicial,onPausa
                 </div>
               )}
               <div className="flex items-center gap-3">
-                <div className="rounded-xl w-10 h-10 flex items-center justify-center text-emerald-700 text-xl font-black bg-white border border-emerald-200">✓</div>
+                <div style={{background:"#1a3a10"}} className=" rounded-xl w-10 h-10 flex items-center justify-center text-green-400 text-xl font-black border border-emerald-200">✓</div>
                 <div className="flex-1">
                   <p className="text-gray-900 font-bold">{encontrado.caravana}</p>
-                  <p className="text-gray-600 text-xs">{encontrado.categoria+" · "+encontrado.sexo}</p>
-                  {yaRegistrado&&<p className="text-amber-700 text-xs font-bold">⚠️ Ya registrado</p>}
+                  <p className="text-gray-500 text-xs">{encontrado.categoria+" · "+encontrado.sexo}</p>
+                  {yaRegistrado&&<p className="text-amber-300 text-xs font-bold">⚠️ Ya registrado</p>}
+                  {!yaRegistrado&&(function(){
+                    var up=ultimoPeso(encontrado.pesajes);
+                    if(up!==null){
+                      var ultSorted=[...(encontrado.pesajes||[])].sort(function(a,b){return new Date(b.fecha)-new Date(a.fecha);});
+                      var dias=Math.round((new Date(fecha)-new Date(ultSorted[0].fecha))/86400000);
+                      return <p className="text-emerald-700 text-xs font-bold">📊 Último: {up+" kg"}{dias>0?" · hace "+dias+"d":""}</p>;
+                    }
+                    return <p className="text-sky-600 text-xs font-bold">🆕 Primer pesaje</p>;
+                  })()}
                 </div>
               </div>
               {!yaRegistrado&&(
@@ -587,41 +838,92 @@ function SesionPesaje({loteId,allLotes,setLotes,nombreLote,sesionInicial,onPausa
                   <input ref={pesoRef} type="number" inputMode="decimal" value={peso}
                     onChange={function(e){setPeso(e.target.value);}}
                     onKeyDown={function(e){if(e.key==="Enter")registrar();}}
-                    placeholder="kg" className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 text-gray-900 text-xl font-bold focus:outline-none focus:border-gray-900 text-center"/>
-                  <button onClick={registrar} className="w-full bg-emerald-600 active:bg-emerald-700 text-white rounded-xl py-4 text-2xl font-black transition-colors">ENTER</button>
+                    placeholder="kg" className="w-full bg-gray-50 border border-emerald-200 rounded-xl px-4 py-3 text-gray-900 text-xl font-bold focus:outline-none focus:border-emerald-400 text-center"/>
+                  <button onClick={registrar} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12)"}} className="w-full bg-emerald-600 text-gray-900 rounded-xl py-4 text-2xl font-black border border-emerald-600">ENTER</button>
                 </div>
               )}
             </div>
           )}
-          {noEncontrado&&<p className="mt-2 text-amber-700 text-sm font-bold">{"⚠️ "+busq.trim().toUpperCase()+" — no encontrado"}</p>}
+          {noEncontrado&&<p className="mt-2 text-amber-400 text-sm font-bold">{"⚠️ "+busq.trim().toUpperCase()+" — no encontrado"}</p>}
         </div>
         {/* Log */}
         <div className="px-4 pb-4">
-          <p className="text-[10px] text-gray-500 uppercase tracking-wider font-bold mb-2">{log.length+" pesajes"}</p>
+          <p className="text-[10px] text-gray-400 uppercase tracking-wider font-bold mb-2">{log.length+" pesajes"+(log.length>0?" · Tocá uno para editar":"")}</p>
           {log.map(function(r,i){
+            var editando=editandoId===r.id;
             return(
-              <div key={r.id} className={"flex items-center justify-between rounded-xl px-3 py-2.5 mb-1.5 border "+(i===0?"bg-emerald-50 border-emerald-200":"bg-white border-gray-200")}>
-                <div>
-                  <p className="text-gray-900 font-bold">{r.caravana}</p>
-                  <p className="text-gray-500 text-xs">{r.categoria}</p>
-                  {(r.marcas||[]).length>0&&<p className="text-xs">{r.marcas.map(function(m){return colorEmoji(m.color);}).join(" ")}</p>}
-                </div>
-                <div className="text-right">
-                  <p className="text-gray-900 font-bold">{r.peso+" kg"}</p>
-                  {r.kgGanados!==null&&r.kgGanados!==undefined&&<p className={"text-xs font-semibold "+(r.kgGanados>=0?"text-emerald-600":"text-red-600")}>{(r.kgGanados>0?"+":"")+r.kgGanados+" kg"}</p>}
-                </div>
+              <div key={r.id} className={"rounded-xl px-3 py-2.5 mb-1.5 border "+(i===0&&!editando?"bg-emerald-50 border-emerald-200":editando?"bg-sky-50 border-sky-300":"bg-gray-50 border-gray-200")}>
+                {editando?(
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-gray-900 font-bold">{r.caravana}</p>
+                        <p className="text-gray-500 text-xs">{r.categoria}</p>
+                      </div>
+                      <button onClick={function(){setEditandoId(null);setPesoEdit("");}} className="text-gray-500 text-sm">✕</button>
+                    </div>
+                    <div className="flex gap-2">
+                      <input type="number" inputMode="decimal" value={pesoEdit} onChange={function(e){setPesoEdit(e.target.value);}}
+                        onKeyDown={function(e){if(e.key==="Enter")guardarEdicion(r);}}
+                        autoFocus
+                        className="flex-1 bg-white border border-gray-300 rounded-xl px-3 py-2 text-gray-900 text-lg font-bold focus:outline-none focus:border-gray-900 text-center"/>
+                      <button onClick={function(){guardarEdicion(r);}} className="bg-emerald-500 text-white font-bold px-4 py-2 rounded-xl text-sm">✓</button>
+                      <button onClick={function(){eliminarDelLog(r);setEditandoId(null);}} className="bg-red-50 border border-red-200 text-red-600 font-bold px-3 py-2 rounded-xl text-sm">🗑</button>
+                    </div>
+                  </div>
+                ):(
+                  <button onClick={function(){iniciarEdicion(r);}} className="w-full text-left flex items-center justify-between">
+                    <div>
+                      <p className="text-gray-900 font-bold">{r.caravana}</p>
+                      <p className="text-gray-500 text-xs">{r.categoria}</p>
+                      {(r.marcas||[]).length>0&&<p className="text-xs">{r.marcas.map(function(m){return colorEmoji(m.color);}).join(" ")}</p>}
+                    </div>
+                    <div className="text-right">
+                      <p className="text-gray-900 font-bold">{r.peso+" kg"}</p>
+                      {r.kgGanados!==null&&r.kgGanados!==undefined&&<p className={"text-xs font-semibold "+(r.kgGanados>=0?"text-emerald-600":"text-red-500")}>{(r.kgGanados>0?"+":"")+r.kgGanados+" kg"}</p>}
+                    </div>
+                  </button>
+                )}
               </div>
             );
           })}
         </div>
       </div>
+      {showFaltantes&&(
+        <Modal title={"⚠️ Faltan pesar ("+faltantes.length+")"} onClose={function(){setShowFaltantes(false);}}>
+          <div className="flex flex-col gap-2">
+            {faltantes.length===0?(
+              <p className="text-center text-emerald-600 font-bold py-8">✅ Todos pesados!</p>
+            ):(
+              <>
+                <p className="text-xs text-gray-500 mb-1">{"Del lote "+nombreLote+" · "+animalesActuales.length+" animales totales"}</p>
+                {[...faltantes].sort(function(a,b){return a.caravana.localeCompare(b.caravana);}).map(function(a){
+                  return(
+                    <div key={a.id} className="flex items-center justify-between bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
+                      <div className="flex items-center gap-2">
+                        <div className="bg-white rounded-xl w-9 h-9 flex items-center justify-center font-black text-amber-700 border border-amber-200 text-xs">{a.caravana.slice(-2)}</div>
+                        <div>
+                          <p className="text-gray-900 font-bold text-sm">{a.caravana}</p>
+                          <p className="text-gray-500 text-xs">{a.sexo+" · "+a.categoria}</p>
+                        </div>
+                      </div>
+                      {(a.marcas||[]).length>0&&<span className="text-sm">{a.marcas.map(function(m){return colorEmoji(m.color);}).join(" ")}</span>}
+                    </div>
+                  );
+                })}
+              </>
+            )}
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
 
 // ── Resumen Sesión Modal ──────────────────────────────────────────────────────
-function ResumenSesionModal({sesion,nombreLote,onClose}){
+function ResumenSesionModal({sesion,nombreLote,animales,onVerAnimal,onClose}){
   var [exportData,setExportData]=useState(null);
+  var [verFaltantes,setVerFaltantes]=useState(false);
   var regs=sesion.registros||[];
   var totalKg=regs.reduce(function(s,r){return s+r.peso;},0);
   var promKg=regs.length>0?(totalKg/regs.length).toFixed(1):0;
@@ -631,6 +933,11 @@ function ResumenSesionModal({sesion,nombreLote,onClose}){
   var gdpProm=gdpVals.length>0?(gdpVals.reduce(function(s,r){return s+r.gdpAnimal;},0)/gdpVals.length).toFixed(3):null;
   var kgGanVals=regs.filter(function(r){return r.kgGanados!==null&&r.kgGanados!==undefined;});
   var kgGanTotal=kgGanVals.reduce(function(s,r){return s+r.kgGanados;},0);
+
+  // Faltantes: animales del lote que NO están en los registros de esta sesión
+  var faltantes=(animales||[]).filter(function(a){
+    return !regs.some(function(r){return r.caravana===a.caravana;});
+  });
 
   var stats=[
     ["🐄 Animales",regs.length],
@@ -648,30 +955,80 @@ function ResumenSesionModal({sesion,nombreLote,onClose}){
   return(
     <Modal title={"📋 Sesión "+fmtFecha(sesion.fecha)} onClose={onClose}>
       <div className="flex flex-col gap-3">
+        {sesion.nota&&(
+          <div className="bg-sky-50 border border-sky-200 rounded-xl px-3 py-2">
+            <p className="text-[10px] text-sky-700 uppercase font-bold">📝 Nota de la sesión</p>
+            <p className="text-gray-800 text-sm mt-0.5 whitespace-pre-wrap">{sesion.nota}</p>
+          </div>
+        )}
         <div className="grid grid-cols-2 gap-2">
           {stats.map(function(s){
             return(
-              <div key={s[0]} className="bg-gray-50 border border-gray-200 rounded-xl p-3 text-center">
+              <div key={s[0]} style={{background:"#ffffff"}} className=" border border-gray-200 rounded-xl p-3 text-center">
                 <p className="text-[10px] text-gray-500 uppercase font-bold mb-1">{s[0]}</p>
                 <p className="text-gray-900 font-black text-sm">{s[1]}</p>
               </div>
             );
           })}
         </div>
-        <button onClick={function(){setExportData(exportDatosSesion(sesion,nombreLote));}} className="w-full bg-white border border-gray-200 text-gray-700 font-bold py-2.5 rounded-xl text-sm">📊 Exportar a Excel</button>
+
+        {/* Banner faltantes */}
+        {animales&&animales.length>0&&(
+          faltantes.length>0?(
+            <button onClick={function(){setVerFaltantes(function(v){return !v;});}} className="w-full bg-amber-50 border border-amber-300 rounded-xl px-4 py-3 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-xl">⚠️</span>
+                <div className="text-left">
+                  <p className="text-amber-800 font-bold text-sm">{"Faltaron "+faltantes.length+" animal"+(faltantes.length>1?"es":"")+" por pesar"}</p>
+                  <p className="text-amber-600 text-xs">{"de "+animales.length+" totales en el lote"}</p>
+                </div>
+              </div>
+              <span className="text-amber-700 text-sm font-bold">{verFaltantes?"Ocultar":"Ver"}</span>
+            </button>
+          ):(
+            <div className="w-full bg-emerald-50 border border-emerald-300 rounded-xl px-4 py-3 flex items-center gap-2">
+              <span className="text-xl">✅</span>
+              <p className="text-emerald-700 font-bold text-sm">Se pesaron todos los animales del lote</p>
+            </div>
+          )
+        )}
+
+        {verFaltantes&&faltantes.length>0&&(
+          <div className="flex flex-col gap-1.5 max-h-48 overflow-y-auto border-t border-b border-amber-200 py-2">
+            {[...faltantes].sort(function(a,b){return a.caravana.localeCompare(b.caravana);}).map(function(a){
+              return(
+                <button key={a.id} onClick={function(){if(onVerAnimal)onVerAnimal(a.id);}} className="w-full text-left flex items-center justify-between bg-amber-50 hover:bg-amber-100 active:bg-amber-100 border border-amber-200 rounded-xl px-3 py-2 transition-colors">
+                  <div className="flex items-center gap-2">
+                    <div className="bg-white rounded-xl w-9 h-9 flex items-center justify-center font-black text-amber-700 border border-amber-200 text-xs">{a.caravana.slice(-2)}</div>
+                    <div>
+                      <p className="text-gray-900 font-bold text-sm">{a.caravana}</p>
+                      <p className="text-gray-500 text-xs">{a.sexo+" · "+a.categoria}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {(a.marcas||[]).length>0&&<span className="text-sm">{a.marcas.map(function(m){return colorEmoji(m.color);}).join(" ")}</span>}
+                    <span className="text-amber-500 text-lg">›</span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        <button onClick={function(){setExportData(exportDatosSesion(sesion,nombreLote));}} className="w-full bg-gray-50 border border-gray-200 text-gray-700 font-bold py-2.5 rounded-xl text-sm">📊 Exportar a Excel</button>
         {exportData&&<ExportModal {...exportData} onClose={function(){setExportData(null);}}/>}
         <div className="flex flex-col gap-1.5 max-h-60 overflow-y-auto">
           {regs.map(function(r){
             return(
               <div key={r.id} className="flex items-center justify-between bg-white border border-gray-200 rounded-xl px-3 py-2">
                 <div>
-                  <p className="text-gray-900 font-bold text-sm">{r.caravana}</p>
+                  <p className="text-gray-800 font-bold text-sm">{r.caravana}</p>
                   <p className="text-gray-500 text-xs">{r.categoria}</p>
                 </div>
                 <div className="text-right">
                   <p className="text-gray-900 font-bold">{r.peso+" kg"}</p>
-                  {r.kgGanados!==null&&r.kgGanados!==undefined&&<p className={"text-xs "+(r.kgGanados>=0?"text-emerald-600":"text-red-600")}>{(r.kgGanados>0?"+":"")+r.kgGanados+" kg"}</p>}
-                  {r.gdpAnimal!==null&&r.gdpAnimal!==undefined&&<p className="text-gray-500 text-xs">{r.gdpAnimal+" kg/d"}</p>}
+                  {r.kgGanados!==null&&r.kgGanados!==undefined&&<p className={"text-xs "+(r.kgGanados>=0?"text-green-400":"text-red-400")}>{(r.kgGanados>0?"+":"")+r.kgGanados+" kg"}</p>}
+                  {r.gdpAnimal!==null&&r.gdpAnimal!==undefined&&<p className="text-gray-600 text-xs">{r.gdpAnimal+" kg/d"}</p>}
                 </div>
               </div>
             );
@@ -685,20 +1042,151 @@ function ResumenSesionModal({sesion,nombreLote,onClose}){
 // ── Historial Modal ───────────────────────────────────────────────────────────
 function HistorialModal({sesiones,onClose,onVerSesion,onEliminarSesion}){
   var [ask,confirmDialog]=useConfirm();
+  var [modoComparar,setModoComparar]=useState(false);
+  var [sel,setSel]=useState([]); // array de ids
+  var [comparar,setComparar]=useState(null); // {a, b}
   var sorted=[...sesiones].sort(function(a,b){return b.fecha.localeCompare(a.fecha);});
+
+  function toggleSel(id){
+    setSel(function(prev){
+      if(prev.includes(id))return prev.filter(function(x){return x!==id;});
+      if(prev.length>=2)return [prev[1],id]; // Reemplaza el primero
+      return [...prev,id];
+    });
+  }
+
+  function hacerComparacion(){
+    if(sel.length!==2)return;
+    var s1=sesiones.find(function(x){return x.id===sel[0];});
+    var s2=sesiones.find(function(x){return x.id===sel[1];});
+    // Ordenar por fecha: a = más vieja, b = más nueva
+    var a,b;
+    if(new Date(s1.fecha)<=new Date(s2.fecha)){a=s1;b=s2;}else{a=s2;b=s1;}
+    setComparar({a,b});
+  }
+
+  if(comparar){
+    // Cálculos de la comparación
+    var a=comparar.a, b=comparar.b;
+    var dias=Math.round((new Date(b.fecha)-new Date(a.fecha))/86400000);
+    var totalA=a.registros.reduce(function(s,r){return s+r.peso;},0);
+    var totalB=b.registros.reduce(function(s,r){return s+r.peso;},0);
+    var promA=a.registros.length>0?totalA/a.registros.length:0;
+    var promB=b.registros.length>0?totalB/b.registros.length:0;
+    // Animales que están en ambas sesiones
+    var enAmbas=a.registros.filter(function(ra){
+      return b.registros.some(function(rb){return rb.caravana===ra.caravana;});
+    }).map(function(ra){
+      var rb=b.registros.find(function(x){return x.caravana===ra.caravana;});
+      var kgGan=rb.peso-ra.peso;
+      var gdp=dias>0?kgGan/dias:0;
+      return {caravana:ra.caravana,categoria:ra.categoria,pesoA:ra.peso,pesoB:rb.peso,kgGan:parseFloat(kgGan.toFixed(1)),gdp:parseFloat(gdp.toFixed(3))};
+    });
+    var kgGanTotal=enAmbas.reduce(function(s,r){return s+r.kgGan;},0);
+    var gdpProm=enAmbas.length>0?enAmbas.reduce(function(s,r){return s+r.gdp;},0)/enAmbas.length:0;
+
+    return(
+      <Modal title="📊 Comparar sesiones" onClose={function(){setComparar(null);setSel([]);setModoComparar(false);onClose();}}>
+        <div className="flex flex-col gap-3">
+          <button onClick={function(){setComparar(null);}} className="self-start text-gray-600 text-sm font-bold">← Volver</button>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 text-center">
+              <p className="text-[10px] text-gray-500 uppercase font-bold">Sesión A</p>
+              <p className="text-gray-900 font-black text-sm">{fmtFecha(a.fecha)}</p>
+              <p className="text-gray-500 text-xs mt-0.5">{a.registros.length+" animales"}</p>
+            </div>
+            <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 text-center">
+              <p className="text-[10px] text-gray-500 uppercase font-bold">Sesión B</p>
+              <p className="text-gray-900 font-black text-sm">{fmtFecha(b.fecha)}</p>
+              <p className="text-gray-500 text-xs mt-0.5">{b.registros.length+" animales"}</p>
+            </div>
+          </div>
+
+          <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-center">
+            <p className="text-[10px] text-emerald-600 uppercase font-bold">Período</p>
+            <p className="text-emerald-700 font-black text-lg">{dias+" días"}</p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div className="bg-white border border-gray-200 rounded-xl p-3 text-center">
+              <p className="text-[10px] text-gray-500 uppercase font-bold">Prom. kg A</p>
+              <p className="text-gray-900 font-black">{promA.toFixed(1)+" kg"}</p>
+            </div>
+            <div className="bg-white border border-gray-200 rounded-xl p-3 text-center">
+              <p className="text-[10px] text-gray-500 uppercase font-bold">Prom. kg B</p>
+              <p className="text-gray-900 font-black">{promB.toFixed(1)+" kg"}</p>
+            </div>
+          </div>
+
+          {enAmbas.length>0?(
+            <>
+              <div className={"rounded-xl p-3 text-center border "+(kgGanTotal>=0?"bg-emerald-50 border-emerald-200":"bg-red-50 border-red-200")}>
+                <p className="text-[10px] uppercase font-bold text-gray-500">Kg ganados (en {enAmbas.length} animales comunes)</p>
+                <p className={"font-black text-2xl "+(kgGanTotal>=0?"text-emerald-700":"text-red-700")}>{(kgGanTotal>=0?"+":"")+kgGanTotal.toFixed(1)+" kg"}</p>
+                <p className={"text-sm font-bold "+(gdpProm>=0?"text-emerald-600":"text-red-600")}>{"GDP: "+(gdpProm>=0?"+":"")+gdpProm.toFixed(3)+" kg/d"}</p>
+              </div>
+
+              <p className="text-[10px] text-gray-500 uppercase font-bold mt-2">Detalle por animal</p>
+              <div className="flex flex-col gap-1 max-h-64 overflow-y-auto">
+                {[...enAmbas].sort(function(x,y){return y.kgGan-x.kgGan;}).map(function(r){
+                  return(
+                    <div key={r.caravana} className="flex items-center justify-between bg-white border border-gray-200 rounded-xl px-3 py-2">
+                      <div>
+                        <p className="text-gray-900 font-bold text-sm">{r.caravana}</p>
+                        <p className="text-gray-500 text-xs">{r.pesoA+" → "+r.pesoB+" kg"}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className={"font-bold text-sm "+(r.kgGan>=0?"text-emerald-600":"text-red-600")}>{(r.kgGan>=0?"+":"")+r.kgGan+" kg"}</p>
+                        <p className={"text-xs "+(r.gdp>=0?"text-emerald-500":"text-red-500")}>{(r.gdp>=0?"+":"")+r.gdp+" kg/d"}</p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          ):(
+            <p className="text-center text-gray-500 text-sm py-4">No hay animales en común entre ambas sesiones</p>
+          )}
+        </div>
+      </Modal>
+    );
+  }
+
   return(
     <Modal title="📅 Historial" onClose={onClose}>
       <div className="flex flex-col gap-2">
+        {sesiones.length>=2&&(
+          <div className="flex gap-2 mb-1">
+            <button onClick={function(){setModoComparar(function(v){return !v;});setSel([]);}} className={"flex-1 py-2 rounded-xl text-sm font-bold border "+(modoComparar?"bg-gray-900 border-gray-900 text-white":"bg-white border-gray-200 text-gray-700")}>
+              {modoComparar?"✕ Cancelar":"📊 Comparar 2 sesiones"}
+            </button>
+            {modoComparar&&sel.length===2&&(
+              <button onClick={hacerComparacion} className="flex-1 py-2 rounded-xl text-sm font-bold bg-emerald-500 border border-emerald-500 text-white">Comparar →</button>
+            )}
+          </div>
+        )}
+        {modoComparar&&sel.length>0&&sel.length<2&&<p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">Seleccioná {2-sel.length} sesión más</p>}
+
         {sorted.length===0&&<p className="text-gray-400 text-center py-8">Sin sesiones guardadas</p>}
         {sorted.map(function(s){
           var totalKg=s.registros.reduce(function(acc,r){return acc+r.peso;},0);
+          var selected=sel.includes(s.id);
           return(
-            <div key={s.id} className="bg-white border border-gray-200 rounded-xl px-4 py-3 flex items-center justify-between">
-              <button onClick={function(){onVerSesion(s);}} className="text-left flex-1">
-                <p className="text-gray-900 font-bold text-sm">{fmtFecha(s.fecha)}</p>
-                <p className="text-gray-500 text-xs">{s.registros.length+" animales · "+totalKg.toLocaleString("es-AR")+" kg"}</p>
+            <div key={s.id} className={"border rounded-xl px-4 py-3 flex items-center justify-between "+(selected?"bg-emerald-50 border-emerald-400":"bg-white border-gray-200")}>
+              <button onClick={function(){if(modoComparar)toggleSel(s.id);else onVerSesion(s);}} className="text-left flex-1 flex items-center gap-3">
+                {modoComparar&&(
+                  <div className={"w-6 h-6 rounded-full border-2 flex items-center justify-center shrink-0 "+(selected?"bg-emerald-500 border-emerald-500 text-white":"bg-white border-gray-300 text-transparent")}>
+                    ✓
+                  </div>
+                )}
+                <div>
+                  <p className="text-gray-800 font-bold text-sm">{fmtFecha(s.fecha)}</p>
+                  <p className="text-gray-500 text-xs">{s.registros.length+" animales · "+totalKg.toLocaleString("es-AR")+" kg"}</p>
+                  {s.nota&&<p className="text-gray-500 text-xs italic">📝 {s.nota}</p>}
+                </div>
               </button>
-              <button onClick={function(){ask("¿Eliminar esta sesión?",function(){onEliminarSesion(s.id);});}} className="text-red-500 text-lg ml-3">✕</button>
+              {!modoComparar&&<button onClick={function(){ask("¿Eliminar esta sesión?",function(){onEliminarSesion(s.id);});}} className="text-red-500 text-lg ml-3">✕</button>}
             </div>
           );
         })}
@@ -805,57 +1293,57 @@ function ReproModal({lote,onClose,onUpdate,toros}){
         <div className="flex flex-col gap-3">
           {sesiones.length>0&&(
             <div className="grid grid-cols-3 gap-2 mb-1">
-              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-center">
-                <p className="text-xl font-black text-emerald-700">{prenadas}</p>
-                <p className="text-[10px] text-emerald-600 uppercase font-bold mt-0.5">Preñadas</p>
+              <div className="bg-green-50 border border-green-200 rounded-xl p-3 text-center">
+                <p className="text-xl font-black text-green-700">{prenadas}</p>
+                <p className="text-[10px] text-green-500 uppercase font-bold mt-0.5">Preñadas</p>
               </div>
               <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 text-center">
                 <p className="text-xl font-black text-gray-700">{partos.length}</p>
-                <p className="text-[10px] text-gray-500 uppercase font-bold mt-0.5">Partos</p>
+                <p className="text-[10px] text-gray-400 uppercase font-bold mt-0.5">Partos</p>
               </div>
-              <div className={"border rounded-xl p-3 text-center "+(proxPartos.length>0?"bg-amber-50 border-amber-200":"bg-gray-50 border-gray-200")}>
-                <p className={"text-xl font-black "+(proxPartos.length>0?"text-amber-700":"text-gray-700")}>{proxPartos.length}</p>
-                <p className={"text-[10px] uppercase font-bold mt-0.5 "+(proxPartos.length>0?"text-amber-600":"text-gray-500")}>Prox. partos</p>
+              <div className={"border rounded-xl p-3 text-center "+(proxPartos.length>0?"bg-amber-50 border-amber-300":"bg-gray-50 border-gray-200")}>
+                <p className={"text-xl font-black "+(proxPartos.length>0?"text-amber-600":"text-gray-700")}>{proxPartos.length}</p>
+                <p className={"text-[10px] uppercase font-bold mt-0.5 "+(proxPartos.length>0?"text-amber-400":"text-gray-400")}>Prox. partos</p>
               </div>
             </div>
           )}
           {sesionActual&&log.length>0&&(
-            <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
-              <p className="text-amber-800 font-bold text-sm">{"⏸ Sesión pausada · "+(sesionActual.tipo==="tacto"?"Tacto":sesionActual.tipo==="servicio"?"Servicio":"Partos")}</p>
+            <div className="bg-amber-950/30 border border-amber-700 rounded-xl px-4 py-3">
+              <p className="text-amber-300 font-bold text-sm">{"⏸ Sesión pausada · "+(sesionActual.tipo==="tacto"?"Tacto":sesionActual.tipo==="servicio"?"Servicio":"Partos")}</p>
               <p className="text-amber-600 text-xs">{log.length+" registros"}</p>
               <div className="flex gap-2 mt-2">
-                <button onClick={function(){setModo("manga");}} className="flex-1 bg-amber-600 active:bg-amber-700 text-white font-bold py-2 rounded-xl text-sm transition-colors">▶ Retomar</button>
-                <button onClick={function(){setSesionActual(null);setLog([]);}} className="flex-1 bg-white border border-gray-200 text-gray-700 font-bold py-2 rounded-xl text-sm">✕ Descartar</button>
+                <button onClick={function(){setModo("manga");}} style={{boxShadow:"0 1px 2px rgba(0,0,0,0.1)"}} className="flex-1 bg-amber-700 text-white font-bold py-2 rounded-xl text-sm border border-amber-500">▶ Retomar</button>
+                <button onClick={function(){setSesionActual(null);setLog([]);}} className="flex-1 bg-pink-50 text-pink-600 font-bold py-2 rounded-xl text-sm border border-pink-200">✕ Descartar</button>
               </div>
             </div>
           )}
-          <p className="text-xs font-black text-gray-500 uppercase">Nueva sesión</p>
+          <p className="text-xs font-black text-pink-600 uppercase">Nueva sesión</p>
           <div className="grid grid-cols-3 gap-2">
             {[["tacto","🔍","Tacto"],["servicio","💉","Servicio"],["parto","🐄","Parto"]].map(function(item){
               return(
                 <button key={item[0]} onClick={function(){setTipoSesion(item[0]);}}
-                  className={"flex flex-col items-center py-3 rounded-xl border-2 font-bold text-xs transition-all "+(tipoSesion===item[0]?"bg-gray-900 border-gray-900 text-white":"bg-white border-gray-200 text-gray-600")}>
+                  className={"flex flex-col items-center py-3 rounded-xl border-2 font-bold text-xs "+(tipoSesion===item[0]?"bg-rose-600 border-rose-300 text-white":"bg-pink-50 border-pink-200 text-pink-600")}>
                   <span className="text-2xl mb-1">{item[1]}</span>{item[2]}
                 </button>
               );
             })}
           </div>
-          <button onClick={iniciar} className="w-full bg-gray-900 active:bg-gray-700 text-white font-bold py-3 rounded-xl text-base transition-colors">
+          <button onClick={iniciar} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08)"}} className="w-full bg-rose-300 text-white font-black py-3 rounded-xl text-base border border-rose-300">
             {"Iniciar sesión de "+(tipoSesion==="tacto"?"Tacto":tipoSesion==="servicio"?"Servicio":"Partos")}
           </button>
           {sesiones.length>0&&(
-            <div className="flex flex-col gap-2 border-t border-gray-100 pt-3">
-              <p className="text-xs font-black text-gray-500 uppercase">Historial</p>
+            <div className="flex flex-col gap-2 border-t border-pink-200 pt-3">
+              <p className="text-xs font-black text-pink-600 uppercase">Historial</p>
               {[...sesiones].sort(function(a,b){return b.fecha.localeCompare(a.fecha);}).map(function(s){
                 return(
                   <button key={s.id} onClick={function(){setSesionActual(Object.assign({},s,{soloVer:true}));setLog(s.registros);setModo("resumen");}}
-                    className="w-full text-left bg-white border border-gray-200 rounded-xl px-4 py-3 flex items-center justify-between">
+                    className="w-full text-left bg-pink-50 border border-pink-200 rounded-xl px-4 py-3 flex items-center justify-between">
                     <div>
-                      <p className="text-gray-900 font-bold text-sm">{fmtFecha(s.fecha)+" · "+(s.tipo==="tacto"?"Tacto":s.tipo==="servicio"?"Servicio":"Partos")}</p>
-                      <p className="text-gray-500 text-xs">{s.registros.length+" animales"}</p>
+                      <p className="text-white font-black text-sm">{fmtFecha(s.fecha)+" · "+(s.tipo==="tacto"?"Tacto":s.tipo==="servicio"?"Servicio":"Partos")}</p>
+                      <p className="text-pink-500 text-xs">{s.registros.length+" animales"}</p>
                     </div>
                     <div className="flex items-center gap-2">
-                      <span className="text-gray-400 text-xl">›</span>
+                      <span className="text-pink-600 text-xl">›</span>
                       <button onClick={function(e){e.stopPropagation();ask("¿Eliminar sesión?",function(){onUpdate(null,null,s.id);});}} className="text-red-500 text-lg">✕</button>
                     </div>
                   </button>
@@ -874,58 +1362,58 @@ function ReproModal({lote,onClose,onUpdate,toros}){
     var yaReg=encontrada&&encontrada!=="notfound"&&log.find(function(r){return r.caravana===encontrada.caravana;});
     var tipoLabel=sesionActual.tipo==="tacto"?"Tacto":sesionActual.tipo==="servicio"?"Servicio":"Partos";
     return(
-      <div className="fixed inset-0 z-50 flex flex-col bg-white">
-        <div className="bg-white border-b border-gray-200 px-4 py-3 shrink-0">
+      <div className="fixed inset-0 z-50 flex flex-col" style={{background:"#ffffff"}}>
+        <div style={{background:"#ffffff"}} className=" border-b border-gray-200 px-4 py-3 shrink-0">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">{"Manga "+tipoLabel+" · "+lote.nombre}</p>
               <h2 className="text-lg font-bold text-gray-900">{"Sesión "+fmtFecha(sesionActual.fecha)}</h2>
             </div>
             <div className="flex gap-2">
-              <button onClick={function(){setModo("menu");}} className="border border-gray-200 bg-white text-gray-700 font-bold px-3 py-1.5 rounded-xl text-xs">⏸ Pausar</button>
-              <button onClick={finalizar} className="bg-red-600 active:bg-red-700 text-white font-bold px-4 py-1.5 rounded-xl text-sm transition-colors">FIN</button>
+              <button onClick={function(){setModo("menu");}} style={{background:"#1a2e10"}} className=" border border-gray-200 text-emerald-700 font-bold px-3 py-1.5 rounded-xl text-xs">⏸ Pausar</button>
+              <button onClick={finalizar} style={{boxShadow:"0 1px 2px rgba(0,0,0,0.1)"}} className="btn-flash bg-rose-500 text-white font-black px-4 py-1.5 rounded-xl text-sm border border-rose-400">FIN</button>
             </div>
           </div>
         </div>
         {log.length>0&&(
-          <div className="bg-gray-50 border-b border-gray-200 px-4 py-2 shrink-0 flex gap-4">
-            <div className="flex items-center gap-1.5"><span className="text-[10px] text-gray-500 uppercase">Registradas:</span><span className="text-gray-900 font-bold text-sm">{log.length}</span></div>
-            {sesionActual.tipo==="tacto"&&<div className="flex items-center gap-1.5"><span className="text-[10px] text-gray-500 uppercase">Preñadas:</span><span className="text-emerald-700 font-bold text-sm">{log.filter(function(r){return r.resultado==="Preñada";}).length}</span></div>}
-            {sesionActual.tipo==="parto"&&<div className="flex items-center gap-1.5"><span className="text-[10px] text-gray-500 uppercase">Vivos:</span><span className="text-emerald-700 font-bold text-sm">{log.filter(function(r){return r.vivo;}).length}</span></div>}
+          <div style={{background:"#ecfdf5"}} className=" border-b border-emerald-200 px-4 py-2 shrink-0 flex gap-4">
+            <div className="flex items-center gap-1.5"><span className="text-[10px] text-gray-500 uppercase">Registradas:</span><span className="text-gray-800 font-bold text-sm">{log.length}</span></div>
+            {sesionActual.tipo==="tacto"&&<div className="flex items-center gap-1.5"><span className="text-[10px] text-gray-500 uppercase">Preñadas:</span><span className="text-green-300 font-bold text-sm">{log.filter(function(r){return r.resultado==="Preñada";}).length}</span></div>}
+            {sesionActual.tipo==="parto"&&<div className="flex items-center gap-1.5"><span className="text-[10px] text-gray-500 uppercase">Vivos:</span><span className="text-green-300 font-bold text-sm">{log.filter(function(r){return r.vivo;}).length}</span></div>}
           </div>
         )}
         <div className="flex-1 overflow-y-auto flex flex-col">
           <div className="px-4 pt-4 pb-3">
             {/* Servicio panel */}
             {sesionActual.tipo==="servicio"&&(
-              <div className="mb-3 bg-gray-50 border border-gray-200 rounded-xl p-3 flex flex-col gap-2">
+              <div className="mb-3 bg-emerald-50 border border-emerald-200 rounded-xl p-3 flex flex-col gap-2">
                 <div className="grid grid-cols-2 gap-2">
                   <div className="flex flex-col gap-1">
                     <label className="text-[10px] text-gray-500 uppercase font-bold">Fecha servicio</label>
-                    <input type="date" value={form.fechaServicio} onChange={function(e){setF("fechaServicio",e.target.value);}} className="bg-white border border-gray-200 rounded-xl px-2 py-2 text-gray-900 text-sm focus:outline-none focus:border-gray-900"/>
+                    <input type="date" value={form.fechaServicio} onChange={function(e){setF("fechaServicio",e.target.value);}} style={{background:"#f9fafb"}} className=" border border-gray-200 rounded-xl px-2 py-2 text-gray-900 text-sm focus:outline-none"/>
                   </div>
-                  <div className="bg-white border border-gray-200 rounded-xl px-3 py-2 flex flex-col justify-center">
+                  <div style={{background:"#f9fafb"}} className=" border border-gray-200 rounded-xl px-3 py-2 flex flex-col justify-center">
                     <p className="text-[10px] text-gray-500 uppercase font-bold">Parto estimado</p>
-                    <p className="text-gray-900 font-black text-sm">{form.fechaServicio?fmtFecha(sumarDias(form.fechaServicio,283)):"—"}</p>
+                    <p className="text-emerald-700 font-black text-sm">{form.fechaServicio?fmtFecha(sumarDias(form.fechaServicio,283)):"—"}</p>
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <div className="flex flex-col gap-1">
                     <label className="text-[10px] text-gray-500 uppercase font-bold">Tipo</label>
-                    <select value={form.tipo} onChange={function(e){setF("tipo",e.target.value);}} className="bg-white border border-gray-200 rounded-xl px-2 py-2 text-gray-900 text-sm focus:outline-none focus:border-gray-900">
+                    <select value={form.tipo} onChange={function(e){setF("tipo",e.target.value);}} style={{background:"#f9fafb"}} className=" border border-gray-200 rounded-xl px-2 py-2 text-gray-900 text-sm focus:outline-none">
                       <option>Natural</option><option>I.A.</option><option>E.T.</option>
                     </select>
                   </div>
                   <div className="flex flex-col gap-1">
                     <label className="text-[10px] text-gray-500 uppercase font-bold">Toro</label>
-                    <select value={form.toro} onChange={function(e){setF("toro",e.target.value);}} className="bg-white border border-gray-200 rounded-xl px-2 py-2 text-gray-900 text-sm focus:outline-none focus:border-gray-900">
+                    <select value={form.toro} onChange={function(e){setF("toro",e.target.value);}} style={{background:"#f9fafb"}} className=" border border-gray-200 rounded-xl px-2 py-2 text-gray-900 text-sm focus:outline-none">
                       <option value="">— Elegir —</option>
                       {(toros||[]).map(function(t){return <option key={t.id} value={t.caravana}>{t.caravana+(t.raza?" · "+t.raza:"")}</option>;})}
                       <option value="__otro">✏️ Otro</option>
                     </select>
                   </div>
                 </div>
-                <button onClick={rodeoCompleto} className="w-full bg-gray-900 active:bg-gray-700 text-white font-bold py-2.5 rounded-xl text-sm transition-colors">
+                <button onClick={rodeoCompleto} style={{boxShadow:"0 1px 2px rgba(0,0,0,0.1)"}} className="w-full bg-emerald-600 text-gray-900 font-black py-2.5 rounded-xl text-sm border border-emerald-600">
                   {"🐄 Rodeo completo ("+hembras.filter(function(h){return !log.find(function(r){return r.caravana===h.caravana;});}).length+" hembras)"}
                 </button>
               </div>
@@ -935,9 +1423,9 @@ function ReproModal({lote,onClose,onUpdate,toros}){
               onChange={function(e){setBusq(e.target.value);buscar(e.target.value);}}
               onKeyDown={function(e){if(e.key==="Enter"){if(encontrada&&encontrada!=="notfound"&&!yaReg)registrar();else buscar(busq);}}}
               placeholder="N° caravana..." autoComplete="off" autoCorrect="off" autoCapitalize="characters" spellCheck="false"
-              className="w-full bg-white border-2 border-gray-200 focus:border-gray-900 rounded-2xl px-4 py-4 text-gray-900 text-2xl font-bold tracking-widest focus:outline-none placeholder-gray-300"/>
+              className="w-full bg-gray-50 border-2 border-gray-200 focus:border-rose-300 rounded-2xl px-4 py-4 text-gray-900 text-2xl font-bold tracking-widest focus:outline-none placeholder-gray-400"/>
             {encontrada&&encontrada!=="notfound"&&(
-              <div className={"mt-3 rounded-2xl p-3 border "+(yaReg?"bg-amber-50 border-amber-200":"bg-emerald-50 border-emerald-200")}>
+              <div className={"mt-3 rounded-2xl p-3 border "+(yaReg?"bg-amber-950/30 border-amber-700":"bg-emerald-50 border-emerald-200")}>
                 {(encontrada.marcas||[]).length>0&&(
                   <div className="flex flex-col gap-1 mb-2">
                     {(encontrada.marcas||[]).map(function(m){
@@ -947,9 +1435,9 @@ function ReproModal({lote,onClose,onUpdate,toros}){
                 )}
                 <div className="flex items-center justify-between mb-2">
                   <div>
-                    <p className="text-gray-900 font-black text-base">{encontrada.caravana}</p>
-                    <p className="text-gray-600 text-xs">{encontrada.categoria}</p>
-                    {yaReg&&<p className="text-amber-700 text-xs font-bold">⚠️ Ya registrada</p>}
+                    <p className="text-gray-800 font-black text-base">{encontrada.caravana}</p>
+                    <p className="text-gray-500 text-xs">{encontrada.categoria}</p>
+                    {yaReg&&<p className="text-amber-300 text-xs font-bold">⚠️ Ya registrada</p>}
                   </div>
                 </div>
                 {!yaReg&&(
@@ -958,7 +1446,7 @@ function ReproModal({lote,onClose,onUpdate,toros}){
                       <div className="flex gap-2">
                         {["Preñada","Vacía","Dudosa"].map(function(r){
                           var active=form.resultado===r;
-                          var cls="flex-1 py-2 rounded-xl text-xs font-bold border "+(active?(r==="Preñada"?"bg-emerald-600 border-emerald-600 text-white":r==="Vacía"?"bg-red-600 border-red-600 text-white":"bg-amber-500 border-amber-500 text-white"):"bg-white border-gray-200 text-gray-500");
+                          var cls="flex-1 py-2 rounded-xl text-xs font-bold border "+(active?(r==="Preñada"?"bg-green-800 border-green-600 text-white":r==="Vacía"?"bg-red-800 border-red-600 text-white":"bg-amber-800 border-amber-600 text-white"):"bg-gray-50 border-gray-200 text-gray-500");
                           return <button key={r} onClick={function(){setF("resultado",r);}} className={cls}>{r}</button>;
                         })}
                       </div>
@@ -966,14 +1454,14 @@ function ReproModal({lote,onClose,onUpdate,toros}){
                     {sesionActual.tipo==="parto"&&(
                       <div className="flex flex-col gap-2">
                         <div className="flex gap-2">
-                          <button onClick={function(){setF("vivo",true);}} className={"flex-1 py-2 rounded-xl text-xs font-bold border "+(form.vivo?"bg-emerald-600 border-emerald-600 text-white":"bg-white border-gray-200 text-gray-500")}>Vivo</button>
-                          <button onClick={function(){setF("vivo",false);}} className={"flex-1 py-2 rounded-xl text-xs font-bold border "+(!form.vivo?"bg-red-600 border-red-600 text-white":"bg-white border-gray-200 text-gray-500")}>Muerto</button>
+                          <button onClick={function(){setF("vivo",true);}} className={"flex-1 py-2 rounded-xl text-xs font-bold border "+(form.vivo?"bg-green-800 border-green-600 text-white":"bg-gray-50 border-gray-200 text-gray-500")}>Vivo</button>
+                          <button onClick={function(){setF("vivo",false);}} className={"flex-1 py-2 rounded-xl text-xs font-bold border "+(!form.vivo?"bg-red-800 border-red-600 text-white":"bg-gray-50 border-gray-200 text-gray-500")}>Muerto</button>
                         </div>
                         {form.vivo&&(
                           <div className="grid grid-cols-2 gap-2">
                             <div className="flex flex-col gap-1">
                               <label className="text-[10px] text-gray-500 uppercase font-bold">Sexo ternero</label>
-                              <select value={form.sexoTernero} onChange={function(e){setF("sexoTernero",e.target.value);}} className="bg-white border border-gray-200 rounded-xl px-2 py-2 text-gray-900 text-sm focus:outline-none focus:border-gray-900">
+                              <select value={form.sexoTernero} onChange={function(e){setF("sexoTernero",e.target.value);}} style={{background:"#f9fafb"}} className=" border border-gray-200 rounded-xl px-2 py-2 text-gray-900 text-sm focus:outline-none">
                                 <option>Macho</option><option>Hembra</option>
                               </select>
                             </div>
@@ -983,27 +1471,27 @@ function ReproModal({lote,onClose,onUpdate,toros}){
                       </div>
                     )}
                     <Inp label="Observaciones" placeholder="Opcional" value={form.obs} onChange={function(e){setF("obs",e.target.value);}}/>
-                    <button onClick={registrar} className="w-full bg-gray-900 active:bg-gray-700 text-white font-bold py-3 rounded-xl text-lg transition-colors">✓ REGISTRAR</button>
+                    <button onClick={registrar} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08)"}} className="w-full bg-rose-500 text-white font-black py-3 rounded-xl text-lg border border-rose-400">✓ REGISTRAR</button>
                   </div>
                 )}
               </div>
             )}
-            {encontrada==="notfound"&&<p className="mt-2 text-amber-700 text-sm font-bold">{"⚠️ "+busq.trim().toUpperCase()+" — no encontrada"}</p>}
+            {encontrada==="notfound"&&<p className="mt-2 text-amber-400 text-sm font-bold">{"⚠️ "+busq.trim().toUpperCase()+" — no encontrada"}</p>}
           </div>
           <div className="px-4 pb-4">
-            <p className="text-[10px] text-gray-500 uppercase tracking-wider font-bold mb-2">{log.length+" registros"}</p>
+            <p className="text-[10px] text-gray-400 uppercase tracking-wider font-bold mb-2">{log.length+" registros"}</p>
             {log.map(function(r,i){
               return(
-                <div key={r.id} className={"flex items-center justify-between rounded-xl px-3 py-2.5 mb-1.5 border "+(i===0?"bg-emerald-50 border-emerald-200":"bg-white border-gray-200")}>
+                <div key={r.id} className={"flex items-center justify-between rounded-xl px-3 py-2.5 mb-1.5 border "+(i===0?"bg-emerald-50 border-rose-300":"bg-gray-50 border-gray-200")}>
                   <div>
                     <p className="text-gray-900 font-bold text-base">{r.caravana}</p>
                     <p className="text-gray-500 text-xs">{r.categoria}</p>
                   </div>
                   <div className="text-right">
-                    {r.resultado&&<p className={"text-sm font-bold "+(r.resultado==="Preñada"?"text-emerald-700":r.resultado==="Vacía"?"text-red-700":"text-amber-700")}>{r.resultado}</p>}
-                    {r.tipo&&<p className="text-gray-700 text-sm font-bold">{r.tipo+(r.toro&&r.toro!=="__otro"?" · "+r.toro:"")}</p>}
-                    {r.fechaPartoProbable&&<p className="text-amber-700 text-xs">{"Parto: "+fmtFecha(r.fechaPartoProbable)}</p>}
-                    {r.vivo!==undefined&&<p className={"text-sm font-bold "+(r.vivo?"text-emerald-700":"text-red-700")}>{r.vivo?"Vivo":"Muerto"}{r.caravanaTernero?" · "+r.caravanaTernero:""}</p>}
+                    {r.resultado&&<p className={"text-sm font-bold "+(r.resultado==="Preñada"?"text-green-300":r.resultado==="Vacía"?"text-red-300":"text-amber-300")}>{r.resultado}</p>}
+                    {r.tipo&&<p className="text-pink-600 text-sm font-bold">{r.tipo+(r.toro&&r.toro!=="__otro"?" · "+r.toro:"")}</p>}
+                    {r.fechaPartoProbable&&<p className="text-amber-400 text-xs">{"Parto: "+fmtFecha(r.fechaPartoProbable)}</p>}
+                    {r.vivo!==undefined&&<p className={"text-sm font-bold "+(r.vivo?"text-green-300":"text-red-300")}>{r.vivo?"Vivo":"Muerto"}{r.caravanaTernero?" · "+r.caravanaTernero:""}</p>}
                   </div>
                 </div>
               );
@@ -1021,37 +1509,37 @@ function ReproModal({lote,onClose,onUpdate,toros}){
       <Modal title={"📋 "+tipoLbl+" · "+fmtFecha(sesionActual.fecha)} onClose={function(){if(sesionActual.soloVer){setSesionActual(null);setLog([]);}setModo("menu");}}>
         <div className="flex flex-col gap-3">
           <div className="grid grid-cols-2 gap-2">
-            <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 text-center">
-              <p className="text-2xl font-black text-gray-900">{log.length}</p>
-              <p className="text-[10px] text-gray-500 uppercase mt-1">Animales</p>
+            <div style={{background:"#fdf2f8"}} className=" border border-pink-200 rounded-xl p-3 text-center">
+              <p className="text-2xl font-black text-white">{log.length}</p>
+              <p className="text-[10px] text-pink-600 uppercase mt-1">Animales</p>
             </div>
             {sesionActual.tipo==="tacto"&&(
-              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-center">
-                <p className="text-2xl font-black text-emerald-700">{log.filter(function(r){return r.resultado==="Preñada";}).length}</p>
-                <p className="text-[10px] text-emerald-600 uppercase mt-1">Preñadas</p>
+              <div style={{background:"#fdf2f8"}} className=" border border-pink-200 rounded-xl p-3 text-center">
+                <p className="text-2xl font-black text-green-300">{log.filter(function(r){return r.resultado==="Preñada";}).length}</p>
+                <p className="text-[10px] text-pink-600 uppercase mt-1">Preñadas</p>
               </div>
             )}
             {sesionActual.tipo==="parto"&&(
-              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-center">
-                <p className="text-2xl font-black text-emerald-700">{log.filter(function(r){return r.vivo;}).length}</p>
-                <p className="text-[10px] text-emerald-600 uppercase mt-1">Vivos</p>
+              <div style={{background:"#fdf2f8"}} className=" border border-pink-200 rounded-xl p-3 text-center">
+                <p className="text-2xl font-black text-green-300">{log.filter(function(r){return r.vivo;}).length}</p>
+                <p className="text-[10px] text-pink-600 uppercase mt-1">Vivos</p>
               </div>
             )}
           </div>
           <div className="flex flex-col gap-1.5 max-h-64 overflow-y-auto">
             {log.map(function(r){
               return(
-                <div key={r.id} className="flex items-center justify-between bg-white border border-gray-200 rounded-xl px-3 py-2">
+                <div key={r.id} className="flex items-center justify-between bg-pink-50 border border-pink-200 rounded-xl px-3 py-2">
                   <div>
-                    <p className="text-gray-900 font-bold text-sm">{r.caravana}</p>
-                    <p className="text-gray-500 text-xs">{r.categoria}</p>
+                    <p className="text-white font-bold text-sm">{r.caravana}</p>
+                    <p className="text-pink-500 text-xs">{r.categoria}</p>
                   </div>
                   <div className="text-right">
-                    {r.resultado&&<p className={"text-sm font-bold "+(r.resultado==="Preñada"?"text-emerald-700":r.resultado==="Vacía"?"text-red-700":"text-amber-700")}>{r.resultado}</p>}
-                    {r.tipo&&<p className="text-gray-700 text-sm">{r.tipo+(r.toro&&r.toro!=="__otro"?" · "+r.toro:"")}</p>}
-                    {r.fechaPartoProbable&&<p className="text-amber-700 text-xs">{"🐄 Parto est.: "+fmtFecha(r.fechaPartoProbable)}</p>}
-                    {r.vivo!==undefined&&<p className={"text-sm font-bold "+(r.vivo?"text-emerald-700":"text-red-700")}>{r.vivo?"Vivo":"Muerto"}</p>}
-                    {r.obs&&<p className="text-gray-500 text-xs">{r.obs}</p>}
+                    {r.resultado&&<p className={"text-sm font-bold "+(r.resultado==="Preñada"?"text-green-300":r.resultado==="Vacía"?"text-red-300":"text-amber-300")}>{r.resultado}</p>}
+                    {r.tipo&&<p className="text-pink-600 text-sm">{r.tipo+(r.toro&&r.toro!=="__otro"?" · "+r.toro:"")}</p>}
+                    {r.fechaPartoProbable&&<p className="text-amber-400 text-xs">{"🐄 Parto est.: "+fmtFecha(r.fechaPartoProbable)}</p>}
+                    {r.vivo!==undefined&&<p className={"text-sm font-bold "+(r.vivo?"text-green-300":"text-red-300")}>{r.vivo?"Vivo":"Muerto"}</p>}
+                    {r.obs&&<p className="text-pink-500 text-xs">{r.obs}</p>}
                   </div>
                 </div>
               );
@@ -1079,26 +1567,26 @@ function TorosModal({est,onClose,onUpdate}){
     <Modal title="🐂 Toros" onClose={onClose}>
       <div className="flex flex-col gap-3">
         <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 flex flex-col gap-2">
-          <p className="text-xs font-black text-gray-500 uppercase">+ Nuevo toro</p>
+          <p className="text-xs font-black text-green-600 uppercase">+ Nuevo toro</p>
           <div className="grid grid-cols-2 gap-2">
             <Inp label="Caravana" placeholder="N° caravana" value={form.caravana} onChange={function(e){setF("caravana",e.target.value);}}/>
             <Sel label="Raza" options={RAZAS} value={form.raza} onChange={function(e){setF("raza",e.target.value);}}/>
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-[10px] text-gray-500 font-bold uppercase">Observaciones</label>
+            <label className="text-[10px] text-green-600 font-bold uppercase">Observaciones</label>
             <textarea rows={2} value={form.obs} onChange={function(e){setF("obs",e.target.value);}} placeholder="Características..."
-              className="bg-white border border-gray-200 rounded-xl px-3 py-2 text-gray-900 text-sm focus:outline-none focus:border-gray-900 resize-none placeholder-gray-400"/>
+              className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-gray-800 text-sm focus:outline-none focus:border-green-400 resize-none"/>
           </div>
-          <button onClick={guardar} className="w-full bg-gray-900 active:bg-gray-700 text-white font-bold py-2.5 rounded-xl text-sm transition-colors">Guardar Toro</button>
+          <button onClick={guardar} style={{boxShadow:"0 1px 2px rgba(0,0,0,0.1)"}} className="w-full bg-emerald-600 text-gray-900 font-bold py-2.5 rounded-xl text-sm border border-emerald-500">Guardar Toro</button>
         </div>
         {toros.length===0&&<div className="text-center py-8 text-gray-400"><p className="text-4xl mb-2">🐂</p><p className="text-sm">Sin toros</p></div>}
         {toros.map(function(t){
           return(
-            <div key={t.id} className="bg-white border border-gray-200 rounded-xl px-4 py-3 flex items-start justify-between">
+            <div key={t.id} className="bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 flex items-start justify-between">
               <div>
-                <p className="text-gray-900 font-black text-base">{t.caravana}</p>
-                {t.raza&&<p className="text-gray-500 text-xs">{t.raza}</p>}
-                {t.obs&&<p className="text-gray-700 text-sm mt-0.5">{t.obs}</p>}
+                <p className="text-gray-800 font-black text-base">{t.caravana}</p>
+                {t.raza&&<p className="text-green-600 text-xs">{t.raza}</p>}
+                {t.obs&&<p className="text-gray-900 text-sm mt-0.5">{t.obs}</p>}
               </div>
               <button onClick={function(){ask("¿Eliminar toro?",function(){onUpdate(toros.filter(function(x){return x.id!==t.id;}));});}} className="text-red-500 text-lg ml-2">✕</button>
             </div>
@@ -1118,8 +1606,8 @@ function CuadernoModal({notas,onClose,onSave}){
       <div className="flex flex-col gap-3">
         <textarea rows={12} value={texto} onChange={function(e){setTexto(e.target.value);}}
           placeholder="Anotá lo que necesites: actividades, observaciones, recordatorios..."
-          className="w-full bg-white border border-gray-200 rounded-xl px-3 py-3 text-gray-900 text-sm focus:outline-none focus:border-gray-900 resize-none placeholder-gray-400"/>
-        <button onClick={function(){onSave(texto);onClose();}} className="w-full bg-gray-900 active:bg-gray-700 text-white font-bold py-3 rounded-xl transition-colors">Guardar</button>
+          className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-3 text-gray-900 text-sm focus:outline-none resize-none placeholder-gray-400"/>
+        <button onClick={function(){onSave(texto);onClose();}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08)"}} className="w-full bg-emerald-600 text-white font-black py-3 rounded-xl border border-emerald-500">Guardar</button>
       </div>
     </Modal>
   );
@@ -1138,25 +1626,25 @@ function AlertasModal({alertas,onClose,onSave,nombreEst,lotes}){
     setShowForm(false);
   }
   function colorEst(estado){
-    if(estado==="pasada")return "bg-gray-50 border-gray-200 text-gray-500";
-    if(estado==="urgente")return "bg-red-50 border-red-200 text-red-700";
-    if(estado==="pronto")return "bg-amber-50 border-amber-200 text-amber-700";
-    return "bg-emerald-50 border-emerald-200 text-emerald-700";
+    if(estado==="pasada")return "bg-gray-700 border-gray-500 text-gray-300";
+    if(estado==="urgente")return "bg-red-900 border-red-600 text-red-200";
+    if(estado==="pronto")return "bg-amber-900 border-amber-600 text-amber-200";
+    return "bg-emerald-100 border-emerald-300 text-emerald-700";
   }
   var sorted=[...alertas].sort(function(a,b){return new Date(a.fechaHora)-new Date(b.fechaHora);});
   return(
     <Modal title={"🔔 Alertas · "+nombreEst} onClose={onClose}>
       <div className="flex flex-col gap-3">
         {!showForm?(
-          <button onClick={function(){setShowForm(true);}} className="w-full bg-gray-900 active:bg-gray-700 text-white font-bold py-2.5 rounded-xl transition-colors">+ Nueva alerta</button>
+          <button onClick={function(){setShowForm(true);}} style={{boxShadow:"0 1px 2px rgba(0,0,0,0.1)"}} className="w-full bg-emerald-600 text-white font-bold py-2.5 rounded-xl border border-emerald-500">+ Nueva alerta</button>
         ):(
           <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 flex flex-col gap-2">
             <Inp label="Título *" value={form.titulo} onChange={function(e){setF("titulo",e.target.value);}} placeholder="Ej: Vacunar terneros"/>
             <div className="grid grid-cols-2 gap-2">
               <Sel label="Tipo" options={TIPOS_ALERTA} value={form.tipo} onChange={function(e){setF("tipo",e.target.value);}}/>
               <div className="flex flex-col gap-1">
-                <label className="text-[10px] text-gray-500 font-bold uppercase">Lote (opcional)</label>
-                <select value={form.loteId} onChange={function(e){setF("loteId",e.target.value);}} className="bg-white border border-gray-200 rounded-xl px-3 py-2.5 text-gray-900 text-sm focus:outline-none focus:border-gray-900">
+                <label className="text-[10px] text-green-600 font-bold uppercase">Lote (opcional)</label>
+                <select value={form.loteId} onChange={function(e){setF("loteId",e.target.value);}} className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-gray-800 text-sm focus:outline-none focus:border-green-400">
                   <option value="">— General —</option>
                   {(lotes||[]).map(function(l){return <option key={l.id} value={l.id}>{l.nombre}</option>;})}
                 </select>
@@ -1164,13 +1652,13 @@ function AlertasModal({alertas,onClose,onSave,nombreEst,lotes}){
             </div>
             <Inp label="Fecha y hora *" type="datetime-local" value={form.fechaHora} onChange={function(e){setF("fechaHora",e.target.value);}}/>
             <div className="flex flex-col gap-1">
-              <label className="text-[10px] text-gray-500 font-bold uppercase">Observaciones</label>
+              <label className="text-[10px] text-green-600 font-bold uppercase">Observaciones</label>
               <textarea rows={2} value={form.obs} onChange={function(e){setF("obs",e.target.value);}}
-                className="bg-white border border-gray-200 rounded-xl px-3 py-2 text-gray-900 text-sm focus:outline-none focus:border-gray-900 resize-none"/>
+                className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-gray-800 text-sm focus:outline-none focus:border-green-400 resize-none"/>
             </div>
             <div className="flex gap-2">
-              <button onClick={function(){setShowForm(false);}} className="flex-1 py-2 rounded-xl border border-gray-200 bg-white text-gray-700 text-sm">Cancelar</button>
-              <button onClick={guardar} className="flex-1 py-2 rounded-xl bg-gray-900 text-white font-bold text-sm">Guardar</button>
+              <button onClick={function(){setShowForm(false);}} className="flex-1 py-2 rounded-xl border border-gray-200 text-gray-500 text-sm">Cancelar</button>
+              <button onClick={guardar} className="flex-1 py-2 rounded-xl bg-emerald-600 text-gray-900 font-bold text-sm border border-emerald-400">Guardar</button>
             </div>
           </div>
         )}
@@ -1190,7 +1678,7 @@ function AlertasModal({alertas,onClose,onSave,nombreEst,lotes}){
                 </div>
                 <div className="flex flex-col gap-1 ml-2">
                   {!a.pasada&&<button onClick={function(){onSave(alertas.map(function(x){return x.id===a.id?Object.assign({},x,{pasada:true}):x;}));}} className="text-xs opacity-60 hover:opacity-100">✓</button>}
-                  <button onClick={function(){ask("¿Eliminar alerta?",function(){onSave(alertas.filter(function(x){return x.id!==a.id;}));});}} className="text-red-500 text-lg">✕</button>
+                  <button onClick={function(){ask("¿Eliminar alerta?",function(){onSave(alertas.filter(function(x){return x.id!==a.id;}));});}} className="text-red-400 text-lg">✕</button>
                 </div>
               </div>
             </div>
@@ -1227,8 +1715,8 @@ function AgroVistaLote({agro,onUpdate,loteNombre}){
 
   function tabBtn(t,label){
     return(
-      <button key={t} onClick={function(){setTab(t);}}
-        className={"px-3 py-2 rounded-xl text-xs font-bold border-2 transition-all "+(tab===t?"bg-gray-900 border-gray-900 text-white":"bg-white border-gray-200 text-gray-600")}>
+      <button key={t} onClick={function(){setTab(t);}
+      } className={"px-3 py-2 rounded-xl text-xs font-black border-2 "+(tab===t?"bg-amber-300 border-amber-300 text-white":"bg-white border-amber-200 text-amber-500")}>
         {label}
       </button>
     );
@@ -1247,49 +1735,49 @@ function AgroVistaLote({agro,onUpdate,loteNombre}){
           {!potreroActivo&&(
             <div className="flex flex-col gap-3">
               <input value={busqPot} onChange={function(e){setBusqPot(e.target.value);}} placeholder="🔍 Buscar potrero..."
-                className="bg-white border border-gray-200 rounded-xl px-3 py-2.5 text-gray-900 text-sm focus:outline-none focus:border-gray-900 w-full"/>
+                style={{background:"#f9fafb"}} className=" border border-gray-200 rounded-xl px-3 py-2.5 text-gray-900 text-sm focus:outline-none w-full"/>
               {mostrarNuevo?(
                 <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 flex flex-col gap-3">
                   <Inp label="Nombre" placeholder="Ej: Potrero Norte" value={formPot.nombre} onChange={function(e){setPot("nombre",e.target.value);}}/>
                   <Inp label="Hectáreas" type="number" placeholder="0" value={formPot.hectareas} onChange={function(e){setPot("hectareas",e.target.value);}}/>
                   <div className="flex gap-2">
-                    <button onClick={function(){setMostrarNuevo(false);}} className="flex-1 py-2 rounded-xl border border-gray-200 bg-white text-gray-700 text-sm">Cancelar</button>
-                    <button onClick={guardarPotrero} className="flex-1 py-2 rounded-xl bg-gray-900 text-white font-bold text-sm">Guardar</button>
+                    <button onClick={function(){setMostrarNuevo(false);}} className="flex-1 py-2 rounded-xl border border-gray-200 text-gray-700 text-sm">Cancelar</button>
+                    <button onClick={guardarPotrero} className="flex-1 py-2 rounded-xl bg-amber-300 text-white font-bold text-sm border border-amber-300">Guardar</button>
                   </div>
                 </div>
               ):(
-                <button onClick={function(){setMostrarNuevo(true);}} className="w-full bg-gray-900 active:bg-gray-700 text-white font-bold py-2.5 rounded-xl text-sm transition-colors">＋ Nuevo Potrero</button>
+                <button onClick={function(){setMostrarNuevo(true);}} style={{boxShadow:"0 1px 2px rgba(0,0,0,0.1)"}} className="w-full bg-amber-300 text-white font-bold py-2.5 rounded-xl text-sm border border-amber-300">＋ Nuevo Potrero</button>
               )}
               {potreros.filter(function(p){return p.nombre.toLowerCase().includes(busqPot.toLowerCase());}).map(function(p){
                 var acts=registros.filter(function(r){return r.potrero===p.nombre;});
                 return(
-                  <button key={p.id} onClick={function(){setPotreroActivo(p);}} className="w-full text-left bg-white border border-gray-200 hover:border-gray-300 rounded-xl px-4 py-3 transition-colors">
+                  <button key={p.id} onClick={function(){setPotreroActivo(p);}} className="w-full text-left bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
                     <div className="flex items-center justify-between">
                       <div>
-                        <p className="text-gray-900 font-black text-base">{p.nombre}</p>
+                        <p className="text-white font-black text-base">{p.nombre}</p>
                         <div className="flex gap-3 mt-1">
-                          {p.hectareas>0&&<span className="text-[10px] text-gray-500 font-bold">{p.hectareas+" ha"}</span>}
-                          <span className="text-[10px] text-gray-400">{acts.length+" actividades"}</span>
+                          {p.hectareas>0&&<span className="text-[10px] text-amber-600 font-bold">{p.hectareas+" ha"}</span>}
+                          <span className="text-[10px] text-amber-500">{acts.length+" actividades"}</span>
                         </div>
                       </div>
-                      <span className="text-gray-400 text-xl">›</span>
+                      <span className="text-amber-500 text-xl">›</span>
                     </div>
                   </button>
                 );
               })}
-              {potreros.length===0&&!mostrarNuevo&&<div className="text-center py-8 text-gray-400"><p className="text-4xl mb-2">🗺️</p><p className="text-sm">Sin potreros</p></div>}
+              {potreros.length===0&&!mostrarNuevo&&<div className="text-center py-8 text-amber-400"><p className="text-4xl mb-2">🗺️</p><p className="text-sm">Sin potreros</p></div>}
             </div>
           )}
           {potreroActivo&&(
             <div className="flex flex-col gap-3">
               <div className="flex items-center gap-2">
-                <button onClick={function(){setPotreroActivo(null);}} className="text-gray-700 text-sm font-bold">← Volver</button>
-                <h3 className="text-gray-900 font-black text-lg flex-1">{potreroActivo.nombre}</h3>
-                <button onClick={function(){ask("¿Eliminar potrero?",function(){onUpdate(Object.assign({},agro,{potreros:potreros.filter(function(x){return x.id!==potreroActivo.id;})}));setPotreroActivo(null);});}} className="text-red-600 text-xs border border-red-200 bg-red-50 px-2 py-1 rounded-lg">🗑</button>
+                <button onClick={function(){setPotreroActivo(null);}} className="text-white text-sm font-bold">← Volver</button>
+                <h3 className="text-white font-black text-lg flex-1">{potreroActivo.nombre}</h3>
+                <button onClick={function(){ask("¿Eliminar potrero?",function(){onUpdate(Object.assign({},agro,{potreros:potreros.filter(function(x){return x.id!==potreroActivo.id;})}));setPotreroActivo(null);});}} className="text-red-500 text-xs border border-red-800 px-2 py-1 rounded-lg">🗑</button>
               </div>
-              {potreroActivo.hectareas>0&&<p className="text-gray-500 text-sm">{potreroActivo.hectareas+" ha"}</p>}
-              <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 flex flex-col gap-2">
-                <p className="text-xs font-black text-gray-500 uppercase">+ Actividad</p>
+              {potreroActivo.hectareas>0&&<p className="text-amber-600 text-sm">{potreroActivo.hectareas+" ha"}</p>}
+              <div style={{background:"#f9fafb"}} className=" border border-amber-200 rounded-xl p-3 flex flex-col gap-2">
+                <p className="text-xs font-black text-white uppercase">+ Actividad</p>
                 <Sel label="Actividad" options={ACTIVIDADES_AGRO} value={formAct.actividad} onChange={function(e){setA("actividad",e.target.value);}}/>
                 <Sel label="Cultivo (opcional)" options={CULTIVOS} value={formAct.cultivo} onChange={function(e){setA("cultivo",e.target.value);}}/>
                 <div className="grid grid-cols-2 gap-2">
@@ -1297,26 +1785,26 @@ function AgroVistaLote({agro,onUpdate,loteNombre}){
                   <Inp label="Kg cosechados" type="number" placeholder="Solo cosecha" value={formAct.kgCosecha} onChange={function(e){setA("kgCosecha",e.target.value);}}/>
                 </div>
                 <div className="flex flex-col gap-1">
-                  <label className="text-[10px] text-gray-500 font-bold uppercase">Obs.</label>
+                  <label className="text-[10px] text-green-600 font-bold uppercase">Obs.</label>
                   <textarea rows={2} value={formAct.obs} onChange={function(e){setA("obs",e.target.value);}}
-                    className="bg-white border border-gray-200 rounded-xl px-3 py-2 text-gray-900 text-sm focus:outline-none focus:border-gray-900 resize-none"/>
+                    className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-gray-800 text-sm focus:outline-none focus:border-green-400 resize-none"/>
                 </div>
                 <button onClick={function(){
                   if(!formAct.actividad)return;
                   onUpdate(Object.assign({},agro,{registros:[...registros,{id:Date.now(),fecha:formAct.fecha,actividad:formAct.actividad,cultivo:formAct.cultivo,potrero:potreroActivo.nombre,obs:formAct.obs,kgCosecha:formAct.kgCosecha?parseFloat(formAct.kgCosecha):null}]}));
                   setA("actividad","");setA("cultivo","");setA("obs","");setA("kgCosecha","");
-                }} className="w-full bg-gray-900 active:bg-gray-700 text-white font-bold py-2 rounded-xl text-sm transition-colors">Guardar</button>
+                }} className="w-full bg-amber-300 text-white font-bold py-2 rounded-xl text-sm border border-amber-300">Guardar</button>
               </div>
               {registros.filter(function(r){return r.potrero===potreroActivo.nombre;}).length===0&&<p className="text-gray-400 text-sm text-center py-4">Sin actividades</p>}
               {[...registros].filter(function(r){return r.potrero===potreroActivo.nombre;}).sort(function(a,b){return b.fecha.localeCompare(a.fecha);}).map(function(r){
                 return(
-                  <div key={r.id} className="bg-white border border-gray-200 rounded-xl px-4 py-3 flex items-start justify-between">
+                  <div key={r.id} className="bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 flex items-start justify-between">
                     <div className="flex-1">
-                      <p className="text-sm font-black text-gray-900">{r.actividad}</p>
-                      {r.cultivo&&<span className="text-[10px] bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded-full">{r.cultivo}</span>}
-                      <p className="text-gray-500 text-xs">{fmtFecha(r.fecha)}</p>
-                      {r.kgCosecha&&<p className="text-gray-900 text-sm font-bold">{"🌾 "+r.kgCosecha.toLocaleString("es-AR")+" kg"+(potreroActivo.hectareas>0?" · "+(r.kgCosecha/potreroActivo.hectareas).toFixed(0)+" kg/ha":"")}</p>}
-                      {r.obs&&<p className="text-gray-700 text-sm mt-1">{r.obs}</p>}
+                      <p className="text-sm font-black text-white">{r.actividad}</p>
+                      {r.cultivo&&<span className="text-[10px] bg-amber-100 text-amber-700 border border-amber-300 px-2 py-0.5 rounded-full">{r.cultivo}</span>}
+                      <p className="text-green-600 text-xs">{fmtFecha(r.fecha)}</p>
+                      {r.kgCosecha&&<p className="text-white text-sm font-bold">{"🌾 "+r.kgCosecha.toLocaleString("es-AR")+" kg"+(potreroActivo.hectareas>0?" · "+(r.kgCosecha/potreroActivo.hectareas).toFixed(0)+" kg/ha":"")}</p>}
+                      {r.obs&&<p className="text-gray-900 text-sm mt-1">{r.obs}</p>}
                     </div>
                     <button onClick={function(){ask("¿Eliminar?",function(){onUpdate(Object.assign({},agro,{registros:registros.filter(function(x){return x.id!==r.id;})}));});}} className="text-red-500 text-lg ml-2">✕</button>
                   </div>
@@ -1333,8 +1821,8 @@ function AgroVistaLote({agro,onUpdate,loteNombre}){
           <div className="grid grid-cols-2 gap-3">
             <Inp label="Fecha" type="date" value={formAct.fecha} onChange={function(e){setA("fecha",e.target.value);}}/>
             <div className="flex flex-col gap-1">
-              <label className="text-[10px] text-gray-500 font-bold uppercase">Potrero</label>
-              <select value={formAct.potrero} onChange={function(e){setA("potrero",e.target.value);}} className="bg-white border border-gray-200 rounded-xl px-3 py-2.5 text-gray-900 text-sm focus:outline-none focus:border-gray-900">
+              <label className="text-[10px] text-green-600 font-bold uppercase">Potrero</label>
+              <select value={formAct.potrero} onChange={function(e){setA("potrero",e.target.value);}} className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-gray-800 text-sm focus:outline-none focus:border-green-400">
                 <option value="">— General —</option>
                 {potreros.map(function(p){return <option key={p.id} value={p.nombre}>{p.nombre}</option>;})}
               </select>
@@ -1342,28 +1830,28 @@ function AgroVistaLote({agro,onUpdate,loteNombre}){
           </div>
           <Sel label="Cultivo (opcional)" options={CULTIVOS} value={formAct.cultivo} onChange={function(e){setA("cultivo",e.target.value);}}/>
           <div className="flex flex-col gap-1">
-            <label className="text-[10px] text-gray-500 font-bold uppercase">Observaciones</label>
+            <label className="text-[10px] text-green-600 font-bold uppercase">Observaciones</label>
             <textarea rows={2} value={formAct.obs} onChange={function(e){setA("obs",e.target.value);}}
-              className="bg-white border border-gray-200 rounded-xl px-3 py-2 text-gray-900 text-sm focus:outline-none focus:border-gray-900 resize-none"/>
+              className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-gray-800 text-sm focus:outline-none focus:border-green-400 resize-none"/>
           </div>
           <button onClick={function(){
             if(!formAct.actividad)return;
             onUpdate(Object.assign({},agro,{registros:[...registros,{id:Date.now(),fecha:formAct.fecha,actividad:formAct.actividad,cultivo:formAct.cultivo,potrero:formAct.potrero,obs:formAct.obs}]}));
             setA("actividad","");setA("obs","");setA("potrero","");setA("cultivo","");
-          }} className="w-full bg-gray-900 active:bg-gray-700 text-white font-bold py-3 rounded-xl text-sm transition-colors">Guardar Actividad</button>
+          }} className="w-full bg-amber-300 text-white font-bold py-3 rounded-xl text-sm border border-amber-300">Guardar Actividad</button>
           <div className="flex flex-col gap-2 border-t border-gray-100 pt-3">
             {registros.length===0&&<p className="text-gray-400 text-sm text-center py-4">Sin actividades</p>}
             {[...registros].sort(function(a,b){return b.fecha.localeCompare(a.fecha);}).map(function(r){
               return(
-                <div key={r.id} className="bg-white border border-gray-200 rounded-xl px-4 py-3 flex items-start justify-between">
+                <div key={r.id} className="bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 flex items-start justify-between">
                   <div className="flex-1">
-                    <p className="text-sm font-black text-gray-900">{r.actividad}</p>
+                    <p className="text-sm font-black text-white">{r.actividad}</p>
                     <div className="flex gap-1 flex-wrap mt-1">
-                      {r.cultivo&&<span className="text-[10px] bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded-full">{r.cultivo}</span>}
-                      {r.potrero&&<span className="text-[10px] bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full">{r.potrero}</span>}
+                      {r.cultivo&&<span className="text-[10px] bg-amber-100 text-amber-700 border border-amber-300 px-2 py-0.5 rounded-full">{r.cultivo}</span>}
+                      {r.potrero&&<span className="text-[10px] bg-emerald-100 text-gray-700 border border-emerald-200 px-2 py-0.5 rounded-full">{r.potrero}</span>}
                     </div>
-                    <p className="text-gray-500 text-xs mt-1">{fmtFecha(r.fecha)}</p>
-                    {r.obs&&<p className="text-gray-700 text-sm mt-1">{r.obs}</p>}
+                    <p className="text-gray-700 text-xs mt-1">{fmtFecha(r.fecha)}</p>
+                    {r.obs&&<p className="text-gray-900 text-sm mt-1">{r.obs}</p>}
                   </div>
                   <button onClick={function(){ask("¿Eliminar?",function(){onUpdate(Object.assign({},agro,{registros:registros.filter(function(x){return x.id!==r.id;})}));});}} className="text-red-500 text-lg ml-2">✕</button>
                 </div>
@@ -1375,9 +1863,9 @@ function AgroVistaLote({agro,onUpdate,loteNombre}){
 
       {tab==="gastos"&&(
         <div className="flex flex-col gap-3">
-          <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 text-center">
-            <p className="text-[10px] text-gray-500 uppercase font-bold">Total gastos</p>
-            <p className="text-2xl font-black text-gray-900">{"$"+gastos.reduce(function(s,g){return s+g.monto;},0).toLocaleString("es-AR")}</p>
+          <div style={{background:"#fffbeb"}} className=" border border-amber-200 rounded-xl p-3 text-center">
+            <p className="text-[10px] text-amber-600 uppercase font-bold">Total gastos</p>
+            <p className="text-2xl font-black text-white">{"$"+gastos.reduce(function(s,g){return s+g.monto;},0).toLocaleString("es-AR")}</p>
           </div>
           <Inp label="Concepto" placeholder="Ej: Herbicida, Gasoil..." value={formGasto.concepto} onChange={function(e){setG("concepto",e.target.value);}}/>
           <div className="grid grid-cols-2 gap-3">
@@ -1385,8 +1873,8 @@ function AgroVistaLote({agro,onUpdate,loteNombre}){
             <Inp label="Fecha" type="date" value={formGasto.fecha} onChange={function(e){setG("fecha",e.target.value);}}/>
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-[10px] text-gray-500 font-bold uppercase">Potrero</label>
-            <select value={formGasto.potrero} onChange={function(e){setG("potrero",e.target.value);}} className="bg-white border border-gray-200 rounded-xl px-3 py-2.5 text-gray-900 text-sm focus:outline-none focus:border-gray-900">
+            <label className="text-[10px] text-green-600 font-bold uppercase">Potrero</label>
+            <select value={formGasto.potrero} onChange={function(e){setG("potrero",e.target.value);}} className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-gray-800 text-sm focus:outline-none focus:border-green-400">
               <option value="">— General —</option>
               {potreros.map(function(p){return <option key={p.id} value={p.nombre}>{p.nombre}</option>;})}
             </select>
@@ -1395,18 +1883,18 @@ function AgroVistaLote({agro,onUpdate,loteNombre}){
             if(!formGasto.concepto||!formGasto.monto)return;
             onUpdate(Object.assign({},agro,{gastos:[...gastos,{id:Date.now(),concepto:formGasto.concepto,monto:parseFloat(formGasto.monto),fecha:formGasto.fecha,potrero:formGasto.potrero}]}));
             setFormGasto({fecha:hoy(),concepto:"",monto:"",potrero:""});
-          }} className="w-full bg-gray-900 active:bg-gray-700 text-white font-bold py-3 rounded-xl text-sm transition-colors">Guardar Gasto</button>
+          }} className="w-full bg-amber-300 text-white font-bold py-3 rounded-xl text-sm border border-amber-300">Guardar Gasto</button>
           <div className="flex flex-col gap-2 border-t border-gray-100 pt-3">
             {gastos.length===0&&<p className="text-gray-400 text-sm text-center py-4">Sin gastos</p>}
             {[...gastos].sort(function(a,b){return b.fecha.localeCompare(a.fecha);}).map(function(g){
               return(
-                <div key={g.id} className="bg-white border border-gray-200 rounded-xl px-4 py-3 flex items-center justify-between">
+                <div key={g.id} className="bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 flex items-center justify-between">
                   <div>
-                    <p className="text-gray-900 font-bold text-sm">{g.concepto}</p>
-                    <p className="text-gray-500 text-xs">{fmtFecha(g.fecha)+(g.potrero?" · "+g.potrero:"")}</p>
+                    <p className="text-white font-bold text-sm">{g.concepto}</p>
+                    <p className="text-green-600 text-xs">{fmtFecha(g.fecha)+(g.potrero?" · "+g.potrero:"")}</p>
                   </div>
                   <div className="flex items-center gap-2">
-                    <p className="text-gray-900 font-black">{"$"+g.monto.toLocaleString("es-AR")}</p>
+                    <p className="text-white font-black">{"$"+g.monto.toLocaleString("es-AR")}</p>
                     <button onClick={function(){ask("¿Eliminar?",function(){onUpdate(Object.assign({},agro,{gastos:gastos.filter(function(x){return x.id!==g.id;})}));});}} className="text-red-500 text-lg">✕</button>
                   </div>
                 </div>
@@ -1420,6 +1908,49 @@ function AgroVistaLote({agro,onUpdate,loteNombre}){
   );
 }
 
+// ── Mover Masivo Modal ────────────────────────────────────────────────────────
+function MoverMasivoModal({animales,lotes,onClose,onConfirm}){
+  var [ask,confirmDialog]=useConfirm();
+  var [destId,setDestId]=useState("");
+  var destLote=destId?lotes.find(function(l){return l.id===parseInt(destId);}):null;
+  return(
+    <Modal title={"🔀 Mover "+animales.length+" animal"+(animales.length>1?"es":"")} onClose={onClose}>
+      <div className="flex flex-col gap-3">
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-3">
+          <p className="text-blue-800 font-bold text-sm">Se van a mover {animales.length} animal{animales.length>1?"es":""}</p>
+          <p className="text-blue-700 text-xs mt-0.5">(Los filtrados actuales)</p>
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] text-gray-500 uppercase font-bold">Lote destino</label>
+          <select value={destId} onChange={function(e){setDestId(e.target.value);}} className="bg-white border border-gray-200 rounded-xl px-3 py-2.5 text-gray-900 text-sm focus:outline-none focus:border-gray-900">
+            <option value="">— Elegir lote —</option>
+            {lotes.map(function(l){return <option key={l.id} value={l.id}>{l.nombre+" ("+(l.animales||[]).length+" animales)"}</option>;})}
+          </select>
+        </div>
+        <div className="flex flex-col gap-1.5 max-h-48 overflow-y-auto border border-gray-100 rounded-xl p-2">
+          <p className="text-[10px] text-gray-500 uppercase font-bold">Animales a mover</p>
+          {[...animales].sort(function(a,b){return a.caravana.localeCompare(b.caravana);}).map(function(a){
+            return(
+              <div key={a.id} className="flex items-center gap-2 text-xs">
+                <span className="text-gray-700 font-bold">{a.caravana}</span>
+                <span className="text-gray-500">{a.sexo+" · "+a.categoria}</span>
+                {(a.marcas||[]).length>0&&<span>{a.marcas.map(function(m){return colorEmoji(m.color);}).join("")}</span>}
+              </div>
+            );
+          })}
+        </div>
+        <button onClick={function(){
+          if(!destId||!destLote)return;
+          ask("¿Mover "+animales.length+" animales a "+destLote.nombre+"?",function(){onConfirm(parseInt(destId));});
+        }} disabled={!destId} className={"w-full font-black py-3 rounded-xl text-base border "+(destId?"bg-blue-500 border-blue-500 text-white":"bg-gray-100 border-gray-200 text-gray-400")}>
+          🔀 Confirmar movimiento
+        </button>
+        {confirmDialog}
+      </div>
+    </Modal>
+  );
+}
+
 // ── Marca Masiva Form ─────────────────────────────────────────────────────────
 function MarcaMasivaForm({count,onConfirm,onClose}){
   var [color,setColor]=useState("rojo");
@@ -1427,29 +1958,29 @@ function MarcaMasivaForm({count,onConfirm,onClose}){
   var [custom,setCustom]=useState("");
   return(
     <div className="flex flex-col gap-3">
-      <p className="text-sm text-gray-600">{"Se marcará"+(count>1?"n":"")+" "+count+" animal"+(count>1?"es":"")+" con:"}</p>
+      <p className="text-sm text-gray-400">{"Se marcará"+(count>1?"n":"")+" "+count+" animal"+(count>1?"es":"")+" con:"}</p>
       <div className="flex gap-1">
         {[["rojo","🔴"],["amarillo","🟡"],["verde","🟢"],["azul","🔵"]].map(function(c){
           var active=color===c[0];
           return(
             <button key={c[0]} onClick={function(){setColor(c[0]);}}
-              className={"flex-1 py-2 rounded-xl text-lg font-bold border "+(active?marcaColor(c[0]):"bg-white border-gray-200 text-gray-400")}>
+              className={"flex-1 py-2 rounded-xl text-lg font-bold border "+(active?marcaColor(c[0]):"bg-gray-50 border-gray-200 text-gray-400")}>
               {c[1]}
             </button>
           );
         })}
       </div>
-      <select value={motivo} onChange={function(e){setMotivo(e.target.value);}} className="bg-white border border-gray-200 rounded-xl px-3 py-2.5 text-gray-900 text-sm focus:outline-none focus:border-gray-900">
+      <select value={motivo} onChange={function(e){setMotivo(e.target.value);}} className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-gray-800 text-sm focus:outline-none focus:border-green-400">
         <option value="">— Motivo —</option>
         {MARCAS_MOTIVOS.map(function(m){return <option key={m} value={m}>{m}</option>;})}
         <option value="__otro">✏️ Otro</option>
       </select>
-      {motivo==="__otro"&&<input value={custom} onChange={function(e){setCustom(e.target.value);}} placeholder="Escribí el motivo..." autoFocus className="bg-white border border-gray-200 rounded-xl px-3 py-2 text-gray-900 text-sm focus:outline-none focus:border-gray-900"/>}
+      {motivo==="__otro"&&<input value={custom} onChange={function(e){setCustom(e.target.value);}} placeholder="Escribí el motivo..." autoFocus style={{background:"#f9fafb"}} className=" border border-gray-200 rounded-xl px-3 py-2 text-gray-900 text-sm focus:outline-none"/>}
       <button onClick={function(){
         var m=motivo==="__otro"?custom.trim():motivo;
         if(!m)return;
         onConfirm(color,m);
-      }} className="w-full bg-gray-900 active:bg-gray-700 text-white font-bold py-3 rounded-xl transition-colors">
+      }} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08)"}} className="w-full bg-emerald-600 text-white font-black py-3 rounded-xl border border-emerald-500">
         {"🏷️ Marcar "+count+" animal"+(count>1?"es":"")}
       </button>
     </div>
@@ -1468,9 +1999,12 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
   var [filtroSexo,setFiltroSexo]=useState("");
   var [filtroPesoMin,setFiltroPesoMin]=useState("");
   var [filtroPesoMax,setFiltroPesoMax]=useState("");
+  var [filtroMarca,setFiltroMarca]=useState("");
   var [filtrosVisible,setFiltrosVisible]=useState(false);
   var [showMarcaMasiva,setShowMarcaMasiva]=useState(false);
+  var [showMoverMasivo,setShowMoverMasivo]=useState(false);
   var [resumenSesion,setResumenSesion]=useState(null);
+  var [sesionPendienteReabrir,setSesionPendienteReabrir]=useState(null);
   var [showHistorial,setShowHistorial]=useState(false);
   var [showRenombrar,setShowRenombrar]=useState(false);
   var [showRepro,setShowRepro]=useState(false);
@@ -1486,7 +2020,10 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
   var sesiones=lote.sesiones||[];
   var sesionEnCurso=lote.sesionEnCurso||null;
 
-  function agregar(a){setLotes(function(prev){return prev.map(function(l){return l.id===loteId?Object.assign({},l,{animales:[...l.animales,a]}):l;});});}
+  function agregar(a){
+    logCambio("animal_creado","Nuevo animal "+a.caravana,"Lote: "+lote.nombre);
+    setLotes(function(prev){return prev.map(function(l){return l.id===loteId?Object.assign({},l,{animales:[...l.animales,a]}):l;});});
+  }
   function actualizar(a){
     setLotes(function(prev){
       return prev.map(function(l){
@@ -1503,16 +2040,18 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
   var gdpProm=gdpVals.length>0?(gdpVals.reduce(function(s,v){return s+v;},0)/gdpVals.length).toFixed(3):null;
   var totalMachos=animales.filter(function(a){return a.sexo==="Macho";}).length;
   var totalHembras=animales.filter(function(a){return a.sexo==="Hembra";}).length;
-  var hayFiltros=!!(filtroCateg||filtroSexo||filtroPesoMin||filtroPesoMax);
+  var hayFiltros=!!(filtroCateg||filtroSexo||filtroPesoMin||filtroPesoMax||filtroMarca);
   var filtrados=animales.filter(function(a){
     var qb=busq.trim().toUpperCase();
     var up=ultimoPeso(a.pesajes);
+    var marcaOk=!filtroMarca||(filtroMarca==="_sin"?!a.marcas||a.marcas.length===0:(a.marcas||[]).some(function(m){return m.color===filtroMarca;}));
     return (!qb||a.caravana.includes(qb)||((a.obs||"").toLowerCase().includes(busq.toLowerCase())))&&
       (!filtroCateg||a.categoria===filtroCateg)&&(!filtroSexo||a.sexo===filtroSexo)&&
-      (!filtroPesoMin||up>=parseFloat(filtroPesoMin))&&(!filtroPesoMax||up<=parseFloat(filtroPesoMax));
+      (!filtroPesoMin||up>=parseFloat(filtroPesoMin))&&(!filtroPesoMax||up<=parseFloat(filtroPesoMax))&&marcaOk;
   });
 
   function finalizarSesion(s){
+    logCambio("sesion_pesaje","Sesión de pesaje finalizada","Lote: "+lote.nombre+" · "+s.registros.length+" animales");
     setLotes(function(prev){
       return prev.map(function(l){
         if(l.id!==loteId)return l;
@@ -1544,11 +2083,11 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
 
   if(showAgro){
     return(
-      <div className="min-h-screen bg-white">
-        <header className="bg-white border-b border-gray-200 px-4 py-3 sticky top-0 z-10">
+      <div className="min-h-screen" style={{background:"#ffffff"}}>
+        <header style={{background:"#ffffff"}} className=" border-b border-gray-200 px-4 py-3 sticky top-0 z-10">
           <div className="max-w-xl mx-auto flex items-center gap-3">
-            <button onClick={function(){setShowAgro(false);}} className="bg-white border border-gray-200 text-gray-700 font-bold text-xs px-2 py-1.5 rounded-lg">← Volver</button>
-            <h1 className="text-xl font-black text-gray-900">{"🌾 "+lote.nombre}</h1>
+            <button onClick={function(){setShowAgro(false);}} className="btn-flash bg-gray-100 text-gray-800 text-2xl font-bold w-11 h-11 rounded-full flex items-center justify-center border border-gray-200">&larr;</button>
+            <h1 className="text-xl font-black text-white">{"🌾 "+lote.nombre}</h1>
           </div>
         </header>
         <div className="max-w-xl mx-auto px-4 py-4">
@@ -1570,28 +2109,31 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
   }
 
   var tipoIcon=esAgro?"🌾":esMixto?"🔄":"🐄";
+  var tipoColor=esAgro?"#d4d060":esMixto?"#9090d0":"#c8e6a0";
 
   return(
-    <div className="min-h-screen bg-white text-gray-900">
-      <header className="px-4 py-3 sticky top-0 z-10 bg-white border-b border-gray-200">
+    <div className="min-h-screen" style={{background:"#ffffff",color:"#1a1a1a"}}>
+      <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700;900&display=swap" rel="stylesheet"/>
+      <header className="px-4 py-2 sticky top-0 z-10" style={{background:"#ffffff",borderBottom:"1px solid #e5e7eb"}}>
         <div className="max-w-xl mx-auto">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 min-w-0">
-              <button onClick={onBack} className="bg-white border border-gray-200 text-gray-700 font-bold text-xs px-2 py-1.5 rounded-lg shrink-0">←</button>
-              <h1 className="text-xl font-black text-gray-900 truncate">{tipoIcon+" "+lote.nombre}</h1>
-              {!esAgro&&<span className="text-xs font-bold text-gray-500 shrink-0">{animales.length+" 🐄"}</span>}
-            </div>
+          <div className="flex items-center justify-center gap-3 py-1">
+            <h1 className="text-3xl font-black tracking-tight" style={{color:"#1a4a10"}}>{tipoIcon+" "+lote.nombre}</h1>
+            {!esAgro&&<span className="text-sm font-bold text-emerald-600 bg-emerald-100 border border-emerald-200 px-2 py-1 rounded-full">{animales.length+" 🐄"}</span>}
           </div>
-          {!esAgro&&(
-            <div className="flex gap-2 mt-2 overflow-x-auto">
-              {esMixto&&<button onClick={function(){setShowAgro(true);}} className="bg-white border border-gray-200 text-gray-700 font-bold px-3 py-2 rounded-xl text-sm shrink-0">🌾</button>}
-              <button onClick={function(){setShowHistorial(true);}} className="bg-white border border-gray-200 text-gray-700 font-bold px-3 py-2 rounded-xl text-sm shrink-0">📅{sesiones.length>0?" "+sesiones.length:""}</button>
-              <button onClick={function(){setVista("manga");}} className={"font-bold px-3 py-2 rounded-xl text-sm shrink-0 transition-colors "+(sesionEnCurso?"bg-amber-500 text-white":"bg-emerald-600 text-white active:bg-emerald-700")}>
-                {sesionEnCurso?"⚖️ Retomar":"⚖️ Pesar"}
-              </button>
-              <button onClick={function(){setShowNuevo(true);}} className="bg-gray-900 active:bg-gray-700 text-white font-bold px-3 py-2 rounded-xl text-sm shrink-0 transition-colors">+ Animal</button>
-            </div>
-          )}
+          <div className="flex items-center justify-between mt-1">
+            <button onClick={onBack} className="btn-flash bg-gray-100 text-gray-800 text-2xl font-bold w-11 h-11 rounded-full flex items-center justify-center border border-gray-200">&larr;</button>
+            {!esAgro&&(
+              <div className="flex gap-2">
+                {esMixto&&<button onClick={function(){setShowAgro(true);}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08)"}} className="btn-flash bg-amber-300 text-white font-bold px-3 py-2 rounded-xl text-sm border border-amber-300">🌾 Agro</button>}
+
+                <button onClick={function(){setShowHistorial(true);}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12)"}} className="btn-flash bg-white border border-gray-200 text-gray-700 font-bold px-3 py-2 rounded-xl text-sm">📅{sesiones.length>0?" "+sesiones.length:""}</button>
+                <button onClick={function(){setVista("manga");}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12)"}} className={"btn-flash font-bold px-3 py-2 rounded-xl text-sm border "+(sesionEnCurso?"bg-amber-500 border-amber-500 text-white":"bg-sky-400 border-sky-400 text-white")}>
+                  {sesionEnCurso?"⚖️ Retomar":"⚖️ Pesar"}
+                </button>
+                <button onClick={function(){setShowNuevo(true);}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08)"}} className="btn-flash bg-emerald-300 text-white font-black px-3 py-2 rounded-xl text-sm border border-emerald-300">+ Animal</button>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
@@ -1602,13 +2144,13 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
         {!esAgro&&(
           <>
             {sesionEnCurso&&sesionEnCurso.registros&&sesionEnCurso.registros.length>0&&(
-              <button onClick={function(){setVista("manga");}} className="w-full text-left bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3">
+              <button onClick={function(){setVista("manga");}} className="w-full text-left bg-amber-950/30 border border-amber-800/60 rounded-2xl px-4 py-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <span className="text-amber-600 text-lg">⏸</span>
-                    <div><p className="text-amber-800 font-bold text-sm">{"Sesión en curso — "+fmtFecha(sesionEnCurso.fecha)}</p><p className="text-amber-600 text-xs">{sesionEnCurso.registros.length+" pesajes · Tocá para retomar"}</p></div>
+                    <span className="text-amber-400 text-lg">⏸</span>
+                    <div><p className="text-amber-300 font-bold text-sm">{"Sesión en curso — "+fmtFecha(sesionEnCurso.fecha)}</p><p className="text-amber-700 text-xs">{sesionEnCurso.registros.length+" pesajes · Tocá para retomar"}</p></div>
                   </div>
-                  <span className="text-amber-600 text-lg">▶</span>
+                  <span className="text-amber-500 text-lg">▶</span>
                 </div>
               </button>
             )}
@@ -1618,17 +2160,17 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
               return(
                 <button onClick={function(){setResumenSesion(ult);}} className="w-full text-left bg-emerald-50 border border-emerald-200 rounded-2xl px-4 py-3">
                   <div className="flex items-center justify-between">
-                    <div><p className="text-[10px] text-emerald-600 uppercase font-bold">Última sesión</p><p className="text-gray-900 font-bold text-sm">{fmtFecha(ult.fecha)}</p></div>
+                    <div><p className="text-[10px] text-emerald-600 uppercase font-bold">Última sesión</p><p className="text-gray-800 font-bold text-sm">{fmtFecha(ult.fecha)}</p></div>
                     <div className="flex gap-4 text-right">
-                      <div><p className="text-emerald-700 font-bold">{ult.registros.length}</p><p className="text-[9px] text-emerald-600 uppercase">animales</p></div>
-                      <div><p className="text-emerald-700 font-bold">{totalKg.toLocaleString("es-AR")}</p><p className="text-[9px] text-emerald-600 uppercase">kg</p></div>
+                      <div><p className="text-emerald-700 font-bold">{ult.registros.length}</p><p className="text-[9px] text-gray-500 uppercase">animales</p></div>
+                      <div><p className="text-emerald-700 font-bold">{totalKg.toLocaleString("es-AR")}</p><p className="text-[9px] text-gray-500 uppercase">kg</p></div>
                     </div>
                   </div>
                 </button>
               );
             })()}
 
-            <button onClick={function(){setShowRepro(true);}} className="w-full bg-white border border-gray-200 active:bg-gray-50 text-gray-900 font-bold py-3 rounded-xl text-base transition-colors">🐄 Gestión Reproductiva</button>
+            <button onClick={function(){setShowRepro(true);}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12)"}} className="w-full bg-rose-300 text-white font-black py-3 rounded-xl text-base border border-rose-300">🐄 Gestión Reproductiva</button>
             <div className="grid grid-cols-3 gap-2">
               {[
                 {icon:"🐄",val:animales.length,label:"Total"},
@@ -1636,10 +2178,10 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
                 {icon:"📈",val:gdpProm?gdpProm+" kg/d":"—",label:"GDP prom."}
               ].map(function(s){
                 return(
-                  <div key={s.label} className="bg-gray-50 border border-gray-200 rounded-2xl p-3 text-center">
+                  <div key={s.label} style={{background:"#ffffff"}} className=" border border-gray-200 rounded-2xl p-3 text-center">
                     <p className="text-base">{s.icon}</p>
                     <p className="text-gray-900 font-bold text-sm leading-tight mt-0.5">{s.val}</p>
-                    <p className="text-[9px] text-gray-500 mt-0.5 uppercase tracking-wider">{s.label}</p>
+                    <p className="text-[9px] text-gray-400 mt-0.5 uppercase tracking-wider">{s.label}</p>
                   </div>
                 );
               })}
@@ -1648,16 +2190,21 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
             <div className="flex flex-col gap-2">
               <div className="flex gap-2">
                 <input value={busq} onChange={function(e){setBusq(e.target.value);}} placeholder="🔍 Buscar caravana..."
-                  className="flex-1 bg-white border border-gray-200 rounded-xl px-3 py-2.5 text-gray-900 text-sm focus:outline-none focus:border-gray-900 placeholder-gray-400"/>
-                <button onClick={function(){setFiltrosVisible(function(v){return !v;});}} className={"px-3 py-2 rounded-xl text-xs font-bold border "+(hayFiltros?"bg-gray-900 border-gray-900 text-white":"bg-white border-gray-200 text-gray-700")}>
+                  className="flex-1 bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-gray-900 text-sm focus:outline-none focus:border-emerald-400 placeholder-gray-400"/>
+                <button onClick={function(){setFiltrosVisible(function(v){return !v;});}} className={"px-3 py-2 rounded-xl text-xs font-bold border "+(hayFiltros?"bg-emerald-200 border-emerald-400 text-gray-900":"bg-gray-50 border-gray-200 text-gray-500")}>
                   {"⚙ Filtros"+(hayFiltros?" ("+(([filtroCateg,filtroSexo,filtroPesoMin,filtroPesoMax].filter(Boolean).length)+")"):"") }
                 </button>
               </div>
               {hayFiltros&&filtrados.length>0&&(
-              <div className="flex items-center justify-between py-1">
+              <div className="flex items-center justify-between py-1 gap-2 flex-wrap">
                 <p className="text-xs text-gray-500">{filtrados.length+" animales filtrados"}</p>
-                <div className="flex gap-2">
-                  <button onClick={function(){setShowMarcaMasiva(true);}} className="text-xs bg-white border border-gray-200 text-gray-700 font-bold px-3 py-1.5 rounded-xl">🏷️ Marcar</button>
+                <div className="flex gap-2 flex-wrap">
+                  <button onClick={function(){setShowMarcaMasiva(true);}} className="text-xs bg-gray-100 border border-gray-200 text-gray-700 font-bold px-3 py-1.5 rounded-xl">🏷️ Marcar</button>
+                  {(function(){
+                    var otros=allLotes.filter(function(l){return l.id!==loteId&&l.tipo!=="agricultura";});
+                    if(otros.length===0)return null;
+                    return <button onClick={function(){setShowMoverMasivo(true);}} className="text-xs bg-blue-50 border border-blue-200 text-blue-700 font-bold px-3 py-1.5 rounded-xl">🔀 Mover</button>;
+                  })()}
                   {filtrados.some(function(a){return (a.marcas||[]).length>0;})&&(
                     <button onClick={function(){
                       setLotes(function(prev){
@@ -1669,24 +2216,24 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
                           })});
                         });
                       });
-                    }} className="text-xs bg-red-50 border border-red-200 text-red-700 font-bold px-3 py-1.5 rounded-xl">✕ Desmarcar</button>
+                    }} className="text-xs bg-pink-50 border border-pink-200 text-pink-600 font-bold px-3 py-1.5 rounded-xl">✕ Desmarcar</button>
                   )}
                 </div>
               </div>
             )}
             {filtrosVisible&&(
-                <div className="bg-gray-50 border border-gray-200 rounded-2xl p-3 flex flex-col gap-3">
+                <div style={{background:"#f9fafb"}} className=" border border-gray-200 rounded-2xl p-3 flex flex-col gap-3">
                   <div className="grid grid-cols-2 gap-2">
                     <div className="flex flex-col gap-1">
                       <label className="text-[10px] text-gray-500 uppercase font-bold">Categoría</label>
-                      <select value={filtroCateg} onChange={function(e){setFiltroCateg(e.target.value);}} className="bg-white border border-gray-200 rounded-xl px-2 py-2 text-gray-900 text-sm focus:outline-none focus:border-gray-900">
+                      <select value={filtroCateg} onChange={function(e){setFiltroCateg(e.target.value);}} style={{background:"#ffffff"}} className=" border border-gray-200 rounded-xl px-2 py-2 text-gray-900 text-sm focus:outline-none">
                         <option value="">Todas</option>
                         {CATEGORIAS.map(function(c){return <option key={c} value={c}>{c}</option>;})}
                       </select>
                     </div>
                     <div className="flex flex-col gap-1">
                       <label className="text-[10px] text-gray-500 uppercase font-bold">Sexo</label>
-                      <select value={filtroSexo} onChange={function(e){setFiltroSexo(e.target.value);}} className="bg-white border border-gray-200 rounded-xl px-2 py-2 text-gray-900 text-sm focus:outline-none focus:border-gray-900">
+                      <select value={filtroSexo} onChange={function(e){setFiltroSexo(e.target.value);}} style={{background:"#ffffff"}} className=" border border-gray-200 rounded-xl px-2 py-2 text-gray-900 text-sm focus:outline-none">
                         <option value="">Todos</option><option value="Macho">Macho</option><option value="Hembra">Hembra</option>
                       </select>
                     </div>
@@ -1694,41 +2241,52 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
                   <div className="flex flex-col gap-1">
                     <label className="text-[10px] text-gray-500 uppercase font-bold">Peso (kg)</label>
                     <div className="grid grid-cols-2 gap-2">
-                      <input type="number" placeholder="Mín" value={filtroPesoMin} onChange={function(e){setFiltroPesoMin(e.target.value);}} className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2 text-gray-900 text-sm focus:outline-none focus:border-gray-900"/>
-                      <input type="number" placeholder="Máx" value={filtroPesoMax} onChange={function(e){setFiltroPesoMax(e.target.value);}} className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2 text-gray-900 text-sm focus:outline-none focus:border-gray-900"/>
+                      <input type="number" placeholder="Mín" value={filtroPesoMin} onChange={function(e){setFiltroPesoMin(e.target.value);}} className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2 text-gray-900 text-sm focus:outline-none"/>
+                      <input type="number" placeholder="Máx" value={filtroPesoMax} onChange={function(e){setFiltroPesoMax(e.target.value);}} className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2 text-gray-900 text-sm focus:outline-none"/>
                     </div>
                   </div>
-                  {hayFiltros&&<button onClick={function(){setFiltroCateg("");setFiltroSexo("");setFiltroPesoMin("");setFiltroPesoMax("");}} className="text-xs text-gray-600 text-left">✕ Limpiar filtros</button>}
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[10px] text-gray-500 uppercase font-bold">Marca</label>
+                    <div className="flex gap-1 flex-wrap">
+                      <button onClick={function(){setFiltroMarca("");}} className={"px-3 py-1.5 rounded-lg text-xs font-bold border "+(filtroMarca===""?"bg-gray-900 border-gray-900 text-white":"bg-white border-gray-200 text-gray-600")}>Todos</button>
+                      {[["rojo","🔴"],["amarillo","🟡"],["verde","🟢"],["azul","🔵"]].map(function(c){
+                        return <button key={c[0]} onClick={function(){setFiltroMarca(c[0]);}} className={"px-3 py-1.5 rounded-lg text-sm font-bold border "+(filtroMarca===c[0]?marcaColor(c[0]):"bg-white border-gray-200")}>{c[1]}</button>;
+                      })}
+                      <button onClick={function(){setFiltroMarca("_sin");}} className={"px-3 py-1.5 rounded-lg text-xs font-bold border "+(filtroMarca==="_sin"?"bg-gray-200 border-gray-400 text-gray-700":"bg-white border-gray-200 text-gray-500")}>Sin marca</button>
+                    </div>
+                  </div>
+                  {hayFiltros&&<button onClick={function(){setFiltroCateg("");setFiltroSexo("");setFiltroPesoMin("");setFiltroPesoMax("");setFiltroMarca("");}} className="text-xs text-gray-600 text-left">✕ Limpiar filtros</button>
+                  }
                 </div>
               )}
             </div>
 
             {filtrados.length===0?(
-              <div className="text-center py-16 text-gray-400"><p className="text-4xl mb-3">🌾</p><p className="text-sm font-bold text-gray-700">{animales.length===0?"Sin animales todavía":"Sin resultados"}</p><p className="text-xs text-gray-500 mt-1">{animales.length===0?"Agregá el primer animal":""}</p></div>
+              <div className="text-center py-16 text-gray-300"><p className="text-4xl mb-3">🌾</p><p className="text-sm">{animales.length===0?"Agregá el primer animal":"Sin resultados"}</p></div>
             ):(
               <div className="flex flex-col gap-2">
                 {[...filtrados].sort(function(a,b){return a.caravana.localeCompare(b.caravana);}).map(function(a){
                   var g=gdpTotal(a.pesajes);
                   var up=ultimoPeso(a.pesajes);
                   return(
-                    <button key={a.id} onClick={function(){setDetalleId(a.id);}} className={"w-full text-left rounded-2xl px-4 py-3 transition-all border "+marcaBgCard(a.marcas)}>
+                    <button key={a.id} onClick={function(){setDetalleId(a.id);}} className={"w-full text-left rounded-2xl px-4 py-3 transition-all border "+marcaBgCard(a.marcas)} style={(a.marcas&&a.marcas.length>0)?{color:"#1a1a1a"}:{}}>
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
-                          <div className="bg-gray-100 rounded-xl w-10 h-10 flex items-center justify-center font-black text-gray-700 border border-gray-200 text-sm">{a.caravana.slice(-2)}</div>
+                          <div className={(a.marcas&&a.marcas.length>0)?"rounded-xl w-10 h-10 flex items-center justify-center font-black text-white border text-sm bg-gray-600 border-gray-400":"bg-gray-100 rounded-xl w-10 h-10 flex items-center justify-center font-black text-emerald-600 border border-gray-200 text-sm"}>{a.caravana.slice(-2)}</div>
                           <div>
                             <div className="flex items-center gap-1.5 flex-wrap">
                               <p className="font-bold text-gray-900 text-sm">{a.caravana}</p>
                               {(a.marcas||[]).map(function(m){
-                                return <span key={m.id} className={"text-xs px-2 py-0.5 rounded-full font-bold border "+marcaColor(m.color)}>{colorEmoji(m.color)+" "+m.motivo}</span>;
+                                return <span key={m.id} className={"text-xs px-3 py-1 rounded-full font-bold border ml-auto text-center "+marcaColor(m.color)}>{colorEmoji(m.color)+" "+m.motivo}</span>;
                               })}
                             </div>
                             <div className="flex gap-1.5 mt-0.5"><Badge text={a.sexo} color={a.sexo==="Macho"?"macho":"hembra"}/><Badge text={a.categoria}/></div>
                           </div>
                         </div>
                         <div className="text-right">
-                          {up&&<p className="text-gray-900 font-bold text-sm">{up+" kg"}</p>}
-                          {g!==null&&<p className={"text-xs font-semibold "+(parseFloat(g)>=0?"text-emerald-600":"text-red-600")}>{(parseFloat(g)>=0?"▲":"▼")+" "+Math.abs(g)+" kg/d"}</p>}
-                          {!up&&<p className="text-gray-400 text-xs">Sin pesaje</p>}
+                          {up&&<p className="text-gray-800 font-bold text-sm">{up+" kg"}</p>}
+                          {g!==null&&<p className={"text-xs font-semibold "+(parseFloat(g)>=0?"text-green-400":"text-red-400")}>{(parseFloat(g)>=0?"▲":"▼")+" "+Math.abs(g)+" kg/d"}</p>}
+                          {!up&&<p className="text-gray-300 text-xs">Sin pesaje</p>}
                         </div>
                       </div>
                     </button>
@@ -1737,8 +2295,8 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
               </div>
             )}
 
-            <div className="border-t border-gray-100 pt-3 flex flex-col gap-2">
-              <button onClick={function(){setExportRodeo(exportDatosRodeo(animales,lote.nombre));}} className="w-full bg-white border border-gray-200 text-gray-700 font-bold py-2.5 rounded-xl text-sm flex items-center justify-center gap-2">
+            <div className="border-t border-gray-200 pt-3 flex flex-col gap-2">
+              <button onClick={function(){setExportRodeo(exportDatosRodeo(animales,lote.nombre));}} className="w-full bg-gray-50 border border-gray-200 text-gray-700 font-bold py-2.5 rounded-xl text-sm flex items-center justify-center gap-2">
                 📊 Exportar rodeo a Excel
               </button>
               {exportRodeo&&<ExportModal {...exportRodeo} onClose={function(){setExportRodeo(null);}}/>}
@@ -1747,11 +2305,32 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
         )}
 
         <div className="flex gap-2">
-          <button onClick={function(){setShowRenombrar(true);}} className="flex-1 text-xs text-gray-700 border border-gray-200 bg-white py-2 rounded-xl font-medium">✏️ Renombrar</button>
-          <button onClick={function(){ask("¿Eliminar lote "+lote.nombre+"?",function(){setLotes(function(prev){return prev.filter(function(l){return l.id!==loteId;});});onBack();});}} className="flex-1 text-xs text-red-700 border border-red-200 bg-red-50 py-2 rounded-xl font-medium">🗑 Eliminar lote</button>
+          <button onClick={function(){setShowRenombrar(true);}} className="flex-1 text-xs text-gray-600 border border-gray-200 py-2 rounded-xl">✏️ Renombrar</button>
+          <button onClick={function(){ask("¿Eliminar lote "+lote.nombre+"?",function(){setLotes(function(prev){return prev.filter(function(l){return l.id!==loteId;});});onBack();});}} className="flex-1 text-xs text-red-600 border border-red-900 py-2 rounded-xl">🗑 Eliminar lote</button>
         </div>
       </main>
 
+      {showMoverMasivo&&(
+        <MoverMasivoModal
+          animales={filtrados}
+          lotes={allLotes.filter(function(l){return l.id!==loteId&&l.tipo!=="agricultura";})}
+          onClose={function(){setShowMoverMasivo(false);}}
+          onConfirm={function(destId){
+            var idsAMover=filtrados.map(function(a){return a.id;});
+            var animMov=filtrados;
+            var destLote=allLotes.find(function(l){return l.id===destId;});
+            logCambio("animales_movidos","Movidos "+animMov.length+" animales","De "+lote.nombre+" a "+(destLote?destLote.nombre:"otro lote"));
+            setLotes(function(prev){
+              return prev.map(function(l){
+                if(l.id===loteId)return Object.assign({},l,{animales:l.animales.filter(function(a){return !idsAMover.includes(a.id);})});
+                if(l.id===destId)return Object.assign({},l,{animales:[...l.animales,...animMov]});
+                return l;
+              });
+            });
+            setShowMoverMasivo(false);
+          }}
+        />
+      )}
       {showMarcaMasiva&&(
         <Modal title={"🏷️ Marcar "+filtrados.length+" animales"} onClose={function(){setShowMarcaMasiva(false);}}>
           <MarcaMasivaForm
@@ -1777,8 +2356,15 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
         </Modal>
       )}
       {showNuevo&&<NuevoAnimalModal onClose={function(){setShowNuevo(false);}} onSave={agregar}/>}
-      {detalleAnimal&&<DetalleModal key={detalleAnimal.id} animal={detalleAnimal} onClose={function(){setDetalleId(null);}} onUpdate={actualizar} onDelete={eliminar} lotes={allLotes} loteActualId={loteId} establecimientos={establecimientos} estId={estId} onMoverEst={moverEst}/>}
-      {resumenSesion&&<ResumenSesionModal sesion={resumenSesion} nombreLote={lote.nombre} onClose={function(){setResumenSesion(null);}}/>}
+      {detalleAnimal&&<DetalleModal key={detalleAnimal.id} animal={detalleAnimal} onClose={function(){
+        setDetalleId(null);
+        if(sesionPendienteReabrir){
+          var ses=sesionPendienteReabrir;
+          setSesionPendienteReabrir(null);
+          setResumenSesion(ses);
+        }
+      }} onUpdate={actualizar} onDelete={eliminar} lotes={allLotes} loteActualId={loteId} establecimientos={establecimientos} estId={estId} onMoverEst={moverEst}/>}
+      {resumenSesion&&<ResumenSesionModal sesion={resumenSesion} nombreLote={lote.nombre} animales={animales} onVerAnimal={function(id){setSesionPendienteReabrir(resumenSesion);setResumenSesion(null);setDetalleId(id);}} onClose={function(){setResumenSesion(null);}}/>}
       {showHistorial&&<HistorialModal sesiones={sesiones} onClose={function(){setShowHistorial(false);}} onVerSesion={function(s){setShowHistorial(false);setResumenSesion(s);}} onEliminarSesion={function(id){setLotes(function(prev){return prev.map(function(l){return l.id===loteId?Object.assign({},l,{sesiones:l.sesiones.filter(function(s){return s.id!==id;})}):l;});});}}/>}
       {showRepro&&<ReproModal lote={lote} toros={establecimientos?(establecimientos.find(function(e){return e.id===estId;})||{}).toros||[]:lote.toros||[]} onClose={function(){setShowRepro(false);}} onUpdate={function(sesion,nuevosAnimales,deleteId){
         setLotes(function(prev){
@@ -1841,78 +2427,69 @@ function VistaEstablecimiento({estId,establecimientos,setEstablecimientos,onBack
     );
   }
 
-  var totalAnimales=lotes.reduce(function(s,l){return s+(l.animales||[]).length;},0);
-
   return(
-    <div className="min-h-screen bg-white">
-      <header className="px-4 py-3 sticky top-0 z-10 bg-white border-b border-gray-200">
+    <div className="min-h-screen" style={{background:"#ffffff"}}>
+      <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700;900&display=swap" rel="stylesheet"/>
+      <header className="px-4 py-2 sticky top-0 z-10" style={{background:"#ffffff",borderBottom:"1px solid #e5e7eb"}}>
         <div className="max-w-xl mx-auto">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 min-w-0">
-              <button onClick={onBack} className="bg-white border border-gray-200 text-gray-700 font-bold text-xs px-2 py-1.5 rounded-lg shrink-0">←</button>
-              <div className="min-w-0">
-                <h1 className="text-2xl font-black text-gray-900 tracking-tight leading-tight truncate">🐄 {est.nombre}</h1>
-                <p className="text-[11px] text-gray-500 uppercase tracking-wider font-bold mt-0.5">{totalAnimales+" ANIMALES · "+lotes.length+" LOTES"}</p>
-              </div>
-            </div>
-            <button onClick={function(){setShowNuevoLote(true);}} className="bg-white border border-gray-200 active:bg-gray-50 text-gray-900 font-bold px-4 py-2.5 rounded-xl text-sm shrink-0">+ Lote</button>
+          <div className="flex items-center justify-center py-1">
+            <h1 className="text-3xl font-black text-gray-900 tracking-tight">{est.nombre}</h1>
           </div>
-          <div className="flex gap-2 mt-2">
-            <button onClick={function(){setShowToros(true);}} className="bg-white border border-gray-200 text-gray-700 font-bold px-3 py-2 rounded-xl text-sm">🐂</button>
-            <button onClick={function(){setShowCuaderno(true);}} className="bg-white border border-gray-200 text-gray-700 font-bold px-3 py-2 rounded-xl text-sm">📓</button>
-            <button onClick={function(){setShowAlertas(true);}} className={"font-bold px-3 py-2 rounded-xl text-sm border "+(alertasActivas.length>0?"bg-amber-50 border-amber-200 text-amber-700":"bg-white border-gray-200 text-gray-700")}>
-              {"🔔"+(alertasActivas.length>0?" "+alertasActivas.length:"")}
-            </button>
+          <div className="flex items-center justify-between mt-1">
+            <button onClick={onBack} className="btn-flash bg-gray-100 text-gray-800 text-2xl font-bold w-11 h-11 rounded-full flex items-center justify-center border border-gray-200">&larr;</button>
+            <div className="flex gap-2">
+              <button onClick={function(){setShowToros(true);}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08)"}} className="btn-flash bg-white border border-gray-200 text-gray-700 font-bold px-4 py-3 rounded-xl text-base">🐂 Toros</button>
+              <button onClick={function(){setShowCuaderno(true);}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08)"}} className="btn-flash bg-white border border-gray-200 text-gray-700 font-bold px-4 py-3 rounded-xl text-2xl">📓</button>
+              <button onClick={function(){setShowAlertas(true);}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08)"}} className={"btn-flash border font-bold px-4 py-3 rounded-xl text-2xl "+(alertasActivas.length>0?"bg-amber-500 border-amber-500 text-white":"bg-white border-gray-200 text-gray-700")}>
+                {"🔔"+(alertasActivas.length>0?" "+alertasActivas.length:"")}
+              </button>
+              <button onClick={function(){setShowNuevoLote(true);}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08)"}} className="btn-flash bg-emerald-300 text-white font-black px-5 py-3 rounded-xl text-base border border-emerald-300">+ Lote</button>
+            </div>
           </div>
         </div>
       </header>
 
       <main className="max-w-xl mx-auto px-4 py-4 flex flex-col gap-3">
         {alertasActivas.length>0&&(
-          <button onClick={function(){setShowAlertas(true);}} className="w-full text-left bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3">
+          <button onClick={function(){setShowAlertas(true);}} className="w-full text-left bg-amber-900/20 border border-amber-700/50 rounded-2xl px-4 py-3">
             <div className="flex items-center gap-2">
-              <span className="text-amber-600">🔔</span>
-              <p className="text-amber-800 font-bold text-sm">{alertasActivas.length+" alerta"+(alertasActivas.length>1?"s":"")+" pendiente"+(alertasActivas.length>1?"s":"")}</p>
+              <span className="text-amber-400">🔔</span>
+              <p className="text-amber-300 font-bold text-sm">{alertasActivas.length+" alerta"+(alertasActivas.length>1?"s":"")+" pendiente"+(alertasActivas.length>1?"s":"")}</p>
             </div>
           </button>
         )}
 
         {lotes.length===0&&(
-          <div className="text-center py-20">
-            <p className="text-5xl mb-4">🌾</p>
-            <p className="text-base font-bold text-gray-900 mb-1">Sin lotes todavía</p>
-            <p className="text-sm text-gray-500 mb-6">Creá tu primer lote para empezar</p>
-            <button onClick={function(){setShowNuevoLote(true);}} className="bg-white border border-gray-300 active:bg-gray-50 text-gray-900 font-bold px-6 py-3 rounded-2xl text-sm shadow-sm">
-              + Crear primer lote
-            </button>
-          </div>
+          <div className="text-center py-16 text-gray-400"><p className="text-5xl mb-3">🐄</p><p className="text-sm">Creá el primer lote</p></div>
         )}
 
         {lotes.map(function(lote){
           var animales=lote.animales||[];
           var tipoIcon=lote.tipo==="agricultura"?"🌾":lote.tipo==="mixto"?"🔄":"🐄";
+          var tipoColor=lote.tipo==="agricultura"?"#d4d060":lote.tipo==="mixto"?"#9090d0":"#a0d060";
           return(
             <button key={lote.id} onClick={function(){setLoteActivoId(lote.id);}} className="w-full text-left bg-white border border-gray-200 hover:border-gray-300 rounded-2xl overflow-hidden flex transition-all">
+              <div className="w-2 shrink-0" style={{background:tipoColor}}/>
               <div className="flex items-center gap-3 px-4 py-4 flex-1 min-w-0">
                 <span className="text-3xl">{tipoIcon}</span>
                 <div className="flex-1 min-w-0">
-                  <p className="font-bold text-gray-900 text-base leading-tight truncate">{lote.nombre}</p>
+                  <p className="font-black text-gray-900 text-lg leading-tight truncate">{lote.nombre}</p>
                   {lote.tipo!=="agricultura"&&<p className="text-gray-500 text-sm">{animales.length+" animales"+(animales.length>0?" · "+animales.filter(function(a){return a.sexo==="Macho";}).length+"M / "+animales.filter(function(a){return a.sexo==="Hembra";}).length+"H":"")}</p>}
-                  {lote.tipo==="agricultura"&&<p className="text-gray-500 text-sm">{(lote.agricultura?lote.agricultura.potreros&&lote.agricultura.potreros.length+" potreros":"0 potreros")}</p>}
+                  {lote.tipo==="agricultura"&&<p className="text-amber-600 text-sm">{(lote.agricultura?lote.agricultura.potreros&&lote.agricultura.potreros.length+" potreros":"0 potreros")}</p>}
                 </div>
-                <span className="text-gray-300 text-2xl font-bold shrink-0">›</span>
+                <span className="text-gray-400 text-2xl font-bold shrink-0">›</span>
               </div>
             </button>
           );
         })}
 
         <div className="flex gap-2 pt-2">
-          <button onClick={function(){setShowRenombrar(true);}} className="flex-1 text-xs text-gray-700 border border-gray-200 bg-white py-2 rounded-xl font-medium">✏️ Renombrar</button>
-          <button onClick={function(){ask("¿Eliminar "+est.nombre+" y todos sus lotes?",function(){setEstablecimientos(function(prev){return prev.filter(function(e){return e.id!==estId;});});onBack();});}} className="flex-1 text-xs text-red-700 border border-red-200 bg-red-50 py-2 rounded-xl font-medium">🗑 Eliminar</button>
+          <button onClick={function(){setShowRenombrar(true);}} className="flex-1 text-xs text-gray-600 border border-gray-200 py-2 rounded-xl">✏️ Renombrar</button>
+          <button onClick={function(){ask("¿Eliminar "+est.nombre+" y todos sus lotes?",function(){setEstablecimientos(function(prev){return prev.filter(function(e){return e.id!==estId;});});onBack();});}} className="flex-1 text-xs text-red-600 border border-red-900 py-2 rounded-xl">🗑 Eliminar</button>
         </div>
       </main>
 
-      {showNuevoLote&&<NuevoLoteModal onClose={function(){setShowNuevoLote(false);}} onSave={function(nombre,tipo){setLotes(function(prev){return [...prev,{id:Date.now(),nombre,tipo,animales:[],sesiones:[],sesionEnCurso:null,reproSesiones:[],agricultura:{registros:[],gastos:[],potreros:[]}}];});}}/>}
+      {showNuevoLote&&<NuevoLoteModal onClose={function(){setShowNuevoLote(false);}} onSave={function(nombre,tipo){logCambio("lote_creado","Nuevo lote "+nombre,"Tipo: "+tipo);setLotes(function(prev){return [...prev,{id:Date.now(),nombre,tipo,animales:[],sesiones:[],sesionEnCurso:null,reproSesiones:[],agricultura:{registros:[],gastos:[],potreros:[]}}];});}}/>}
       {showAlertas&&<AlertasModal alertas={alertas} nombreEst={est.nombre} lotes={lotes} onClose={function(){setShowAlertas(false);}} onSave={function(al){setEstablecimientos(function(prev){return prev.map(function(e){return e.id===estId?Object.assign({},e,{alertas:al}):e;});});}}/>}
       {showToros&&<TorosModal est={est} onClose={function(){setShowToros(false);}} onUpdate={function(toros){setEstablecimientos(function(prev){return prev.map(function(e){return e.id===estId?Object.assign({},e,{toros}):e;});});}}/>}
       {showCuaderno&&<CuadernoModal notas={est.notas||""} onClose={function(){setShowCuaderno(false);}} onSave={function(n){setEstablecimientos(function(prev){return prev.map(function(e){return e.id===estId?Object.assign({},e,{notas:n}):e;});});}}/>}
@@ -1923,7 +2500,363 @@ function VistaEstablecimiento({estId,establecimientos,setEstablecimientos,onBack
 }
 
 // ── App ───────────────────────────────────────────────────────────────────────
-export default function App(){
+// ── Pantalla de Login ─────────────────────────────────────────────────────────
+function LoginScreen(){
+  var [modo,setModo]=useState("login"); // login | registro | recuperar
+  var [email,setEmail]=useState("");
+  var [password,setPassword]=useState("");
+  var [password2,setPassword2]=useState("");
+  var [error,setError]=useState("");
+  var [loading,setLoading]=useState(false);
+  var [msgExito,setMsgExito]=useState("");
+
+  function traducirError(code){
+    if(code==="auth/invalid-email")return "El email no es válido";
+    if(code==="auth/user-not-found")return "No hay una cuenta con ese email";
+    if(code==="auth/wrong-password"||code==="auth/invalid-credential")return "Email o contraseña incorrectos";
+    if(code==="auth/email-already-in-use")return "Ya existe una cuenta con ese email";
+    if(code==="auth/weak-password")return "La contraseña es muy débil (mínimo 6 caracteres)";
+    if(code==="auth/network-request-failed")return "Sin conexión a internet";
+    if(code==="auth/too-many-requests")return "Demasiados intentos. Esperá unos minutos";
+    return "Error: "+code;
+  }
+
+  async function ingresar(){
+    setError("");setMsgExito("");
+    if(!email.trim()||!password){setError("Completá email y contraseña");return;}
+    setLoading(true);
+    try{
+      await signInWithEmailAndPassword(auth,email.trim(),password);
+    }catch(e){
+      setError(traducirError(e.code));
+      setLoading(false);
+    }
+  }
+
+  async function registrar(){
+    setError("");setMsgExito("");
+    if(!email.trim()||!password){setError("Completá todos los campos");return;}
+    if(password.length<6){setError("La contraseña debe tener al menos 6 caracteres");return;}
+    if(password!==password2){setError("Las contraseñas no coinciden");return;}
+    setLoading(true);
+    try{
+      await createUserWithEmailAndPassword(auth,email.trim(),password);
+    }catch(e){
+      setError(traducirError(e.code));
+      setLoading(false);
+    }
+  }
+
+  async function recuperar(){
+    setError("");setMsgExito("");
+    if(!email.trim()){setError("Ingresá tu email");return;}
+    setLoading(true);
+    try{
+      await sendPasswordResetEmail(auth,email.trim());
+      setMsgExito("Te mandamos un email para recuperar tu contraseña. Revisá tu bandeja de entrada.");
+      setLoading(false);
+    }catch(e){
+      setError(traducirError(e.code));
+      setLoading(false);
+    }
+  }
+
+  return(
+    <div className="min-h-screen bg-white flex flex-col">
+      <div className="max-w-sm w-full mx-auto px-4 pt-16 pb-8 flex flex-col gap-4">
+        <div className="text-center mb-4">
+          <p className="text-6xl mb-3">🐄</p>
+          <h1 className="text-3xl font-black text-gray-900 tracking-tight">Rodeo</h1>
+          <p className="text-gray-500 text-sm mt-1">Gestión ganadera y agrícola</p>
+        </div>
+
+        <div className="bg-gray-50 border border-gray-200 rounded-2xl p-5 flex flex-col gap-3">
+          <h2 className="text-lg font-bold text-gray-900 text-center">
+            {modo==="login"?"Iniciar sesión":modo==="registro"?"Crear cuenta":"Recuperar contraseña"}
+          </h2>
+
+          <div className="flex flex-col gap-1">
+            <label className="text-[10px] text-gray-500 font-bold uppercase">Email</label>
+            <input type="email" value={email} onChange={function(e){setEmail(e.target.value);}} placeholder="tu@email.com"
+              autoComplete="email" autoCapitalize="none"
+              className="bg-white border border-gray-200 rounded-xl px-3 py-3 text-gray-900 text-base focus:outline-none focus:border-gray-900"/>
+          </div>
+
+          {modo!=="recuperar"&&(
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] text-gray-500 font-bold uppercase">Contraseña</label>
+              <input type="password" value={password} onChange={function(e){setPassword(e.target.value);}} placeholder="Al menos 6 caracteres"
+                className="bg-white border border-gray-200 rounded-xl px-3 py-3 text-gray-900 text-base focus:outline-none focus:border-gray-900"/>
+            </div>
+          )}
+
+          {modo==="registro"&&(
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] text-gray-500 font-bold uppercase">Repetir contraseña</label>
+              <input type="password" value={password2} onChange={function(e){setPassword2(e.target.value);}}
+                className="bg-white border border-gray-200 rounded-xl px-3 py-3 text-gray-900 text-base focus:outline-none focus:border-gray-900"/>
+            </div>
+          )}
+
+          {error&&<div className="bg-red-50 border border-red-200 text-red-700 rounded-xl px-3 py-2 text-sm font-bold">⚠️ {error}</div>}
+          {msgExito&&<div className="bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-xl px-3 py-2 text-sm font-bold">✅ {msgExito}</div>}
+
+          <button onClick={modo==="login"?ingresar:modo==="registro"?registrar:recuperar} disabled={loading}
+            style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12)"}}
+            className={"w-full font-black py-3 rounded-xl text-base border "+(loading?"bg-gray-300 border-gray-300 text-gray-500":"bg-emerald-500 border-emerald-500 text-white")}>
+            {loading?"Procesando...":modo==="login"?"Entrar":modo==="registro"?"Crear cuenta":"Enviar email"}
+          </button>
+
+          {modo==="login"&&(
+            <>
+              <button onClick={function(){setModo("registro");setError("");setMsgExito("");}} className="text-gray-700 text-sm font-bold text-center py-1">
+                ¿No tenés cuenta? <span className="text-emerald-600">Registrate</span>
+              </button>
+              <button onClick={function(){setModo("recuperar");setError("");setMsgExito("");}} className="text-gray-500 text-xs text-center">
+                Olvidé mi contraseña
+              </button>
+            </>
+          )}
+          {modo==="registro"&&(
+            <button onClick={function(){setModo("login");setError("");setMsgExito("");}} className="text-gray-700 text-sm font-bold text-center py-1">
+              ¿Ya tenés cuenta? <span className="text-emerald-600">Iniciá sesión</span>
+            </button>
+          )}
+          {modo==="recuperar"&&(
+            <button onClick={function(){setModo("login");setError("");setMsgExito("");}} className="text-gray-700 text-sm font-bold text-center py-1">
+              ← Volver al login
+            </button>
+          )}
+        </div>
+
+        <p className="text-center text-gray-400 text-xs mt-2">
+          Al registrarte, aceptás guardar tus datos de forma segura.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ── App con autenticación ─────────────────────────────────────────────────────
+export default function AppConAuth(){
+  // Intento recuperar info del usuario guardada previamente (para no esperar a Firebase si estamos offline)
+  var userCache=leerStorage("rodeo_user_cache",null);
+  var [user,setUser]=useState(userCache);
+  var [loadingAuth,setLoadingAuth]=useState(!userCache); // Si tengo cache, no muestro loading
+  // Si ya hay user cache, empezamos como "listo" y sincronizamos en background
+  var [syncStatus,setSyncStatus]=useState(userCache?"listo":"idle");
+  var [syncError,setSyncError]=useState("");
+  var [syncDoneForUid,setSyncDoneForUid]=useState(userCache?userCache.uid:null);
+
+  // Si tengo cache, activo el sync inmediatamente (para que los cambios se guarden)
+  useEffect(function(){
+    if(userCache)activarSync(userCache.uid);
+  },[]);
+
+  // PWA: registrar service worker y manifest (se ejecuta al abrir la app, antes del login)
+  useEffect(function(){
+    try{
+      var iconSvg='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="96" fill="#10b981"/><text x="50%" y="58%" font-size="320" text-anchor="middle" dominant-baseline="middle">🐄</text></svg>';
+      var iconUrl="data:image/svg+xml;base64,"+btoa(iconSvg);
+
+      var manifest={
+        name:"Rodeo - Gestión Ganadera",
+        short_name:"Rodeo",
+        description:"Gestión ganadera y agrícola",
+        start_url:"/",
+        display:"standalone",
+        orientation:"portrait",
+        background_color:"#ffffff",
+        theme_color:"#10b981",
+        icons:[
+          {src:iconUrl,sizes:"192x192",type:"image/svg+xml",purpose:"any maskable"},
+          {src:iconUrl,sizes:"512x512",type:"image/svg+xml",purpose:"any maskable"}
+        ]
+      };
+      var blob=new Blob([JSON.stringify(manifest)],{type:"application/json"});
+      var manifestUrl=URL.createObjectURL(blob);
+
+      var linkManifest=document.querySelector('link[rel="manifest"]');
+      if(!linkManifest){linkManifest=document.createElement("link");linkManifest.rel="manifest";document.head.appendChild(linkManifest);}
+      linkManifest.href=manifestUrl;
+
+      var appleIcon=document.querySelector('link[rel="apple-touch-icon"]');
+      if(!appleIcon){appleIcon=document.createElement("link");appleIcon.rel="apple-touch-icon";document.head.appendChild(appleIcon);}
+      appleIcon.href=iconUrl;
+
+      var themeColor=document.querySelector('meta[name="theme-color"]');
+      if(!themeColor){themeColor=document.createElement("meta");themeColor.name="theme-color";document.head.appendChild(themeColor);}
+      themeColor.content="#10b981";
+
+      // Service worker con caché para funcionar offline
+      // Se registra desde /sw.js (archivo real en public/) para que pueda interceptar cargas iniciales
+      if("serviceWorker" in navigator){
+        window.addEventListener("load",function(){
+          navigator.serviceWorker.register("/sw.js").catch(function(err){
+            console.log("SW registration failed:",err);
+          });
+        });
+      }
+    }catch(e){}
+  },[]);
+
+  useEffect(function(){
+    var offline=typeof navigator!=="undefined"&&navigator.onLine===false;
+    var cache=leerStorage("rodeo_user_cache",null);
+
+    // Si arranco offline con cache, no llamo a onAuthStateChanged porque se puede colgar.
+    // Esperamos a que vuelva online para sincronizar.
+    if(offline&&cache){
+      setUser(cache);
+      setLoadingAuth(false);
+      // Cuando vuelva a haber conexión, enganchamos onAuthStateChanged
+      var onOnline=function(){
+        window.removeEventListener("online",onOnline);
+        onAuthStateChanged(auth,function(u){
+          if(u){
+            try{guardarStorage("rodeo_user_cache",{uid:u.uid,email:u.email});}catch(e){}
+            setUser(function(prev){
+              if(prev&&prev.uid===u.uid)return prev;
+              return u;
+            });
+          }else{
+            // Sesión expiró realmente al volver online
+            setUser(null);
+            desactivarSync();
+            setSyncStatus("idle");
+            try{localStorage.removeItem("rodeo_user_cache");}catch(e){}
+          }
+        });
+      };
+      window.addEventListener("online",onOnline);
+      return function(){window.removeEventListener("online",onOnline);};
+    }
+
+    // Flujo normal (online)
+    var unsub=onAuthStateChanged(auth,function(u){
+      if(u){
+        try{guardarStorage("rodeo_user_cache",{uid:u.uid,email:u.email});}catch(e){}
+        setUser(function(prev){
+          if(prev&&prev.uid===u.uid)return prev;
+          return u;
+        });
+        setLoadingAuth(false);
+      }else{
+        var off=typeof navigator!=="undefined"&&navigator.onLine===false;
+        var c=leerStorage("rodeo_user_cache",null);
+        if(off&&c){
+          setLoadingAuth(false);
+          return;
+        }
+        setUser(null);
+        setLoadingAuth(false);
+        desactivarSync();
+        setSyncStatus("idle");
+        try{localStorage.removeItem("rodeo_user_cache");}catch(e){}
+      }
+    });
+    return unsub;
+  },[]);
+
+  // Cuando el usuario está logueado, cargar datos desde Firestore (solo una vez por UID)
+  useEffect(function(){
+    if(!user)return;
+    // Si ya sincronizamos este uid en esta sesión, no repetir
+    if(syncDoneForUid===user.uid&&syncStatus==="listo")return;
+
+    setSyncStatus("cargando");
+    setSyncError("");
+
+    // Detectar si estamos offline al arrancar
+    var estaOffline=typeof navigator!=="undefined"&&navigator.onLine===false;
+
+    function conTimeout(promesa,ms){
+      return new Promise(function(resolve,reject){
+        var timer=setTimeout(function(){reject(new Error("timeout"));},ms);
+        promesa.then(function(v){clearTimeout(timer);resolve(v);},
+                     function(e){clearTimeout(timer);reject(e);});
+      });
+    }
+
+    // Si estamos offline, usamos directamente los datos locales sin esperar Firestore
+    if(estaOffline){
+      activarSync(user.uid);
+      setSyncStatus("listo");
+      setSyncDoneForUid(user.uid);
+      return function(){};
+    }
+
+    conTimeout(getDoc(refDatosUsuario(user.uid)),8000).then(function(snap){
+      if(snap.exists()){
+        var data=snap.data();
+        if(data.establecimientos&&Array.isArray(data.establecimientos)){
+          guardarStorage("ganadera_establecimientos_v1",data.establecimientos);
+        }
+      }else{
+        var locales=leerStorage("ganadera_establecimientos_v1",null);
+        if(locales&&Array.isArray(locales)&&locales.length>0){
+          return setDoc(refDatosUsuario(user.uid),{
+            establecimientos:locales,
+            actualizado:new Date().toISOString()
+          });
+        }
+      }
+    }).then(function(){
+      activarSync(user.uid);
+      setSyncStatus("listo");
+      setSyncDoneForUid(user.uid);
+    }).catch(function(err){
+      console.error("Error cargando datos:",err);
+      activarSync(user.uid);
+      setSyncStatus("listo");
+      setSyncDoneForUid(user.uid);
+    });
+
+    return function(){};
+  },[user]);
+
+  // Desactivar sync al desmontar
+  useEffect(function(){
+    return function(){desactivarSync();};
+  },[]);
+
+  if(loadingAuth){
+    return(
+      <div className="min-h-screen bg-white flex items-center justify-center">
+        <div className="text-center">
+          <p className="text-5xl mb-3">🐄</p>
+          <p className="text-gray-500 text-sm">Cargando...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if(!user)return <LoginScreen/>;
+
+  if(syncStatus==="cargando"){
+    return(
+      <div className="min-h-screen bg-white flex items-center justify-center">
+        <div className="text-center">
+          <p className="text-5xl mb-3">🐄</p>
+          <p className="text-gray-700 font-bold">Sincronizando tus datos...</p>
+          <p className="text-gray-400 text-xs mt-1">Esto puede tardar unos segundos</p>
+        </div>
+      </div>
+    );
+  }
+
+  return <AppLogueado user={user} syncError={syncError}/>;
+}
+
+// ── App logueada (lo que era antes el App) ────────────────────────────────────
+function AppLogueado({user,syncError}){
+  useEffect(function(){
+    var s=document.createElement("style");
+    s.innerHTML=flashStyle;
+    document.head.appendChild(s);
+    return function(){document.head.removeChild(s);};
+  },[]);
+
   var [establecimientos,setEstablecimientos]=useState(function(){
     var saved=leerStorage("ganadera_establecimientos_v1",null);
     if(saved)return saved;
@@ -1935,9 +2868,17 @@ export default function App(){
   });
   var [estActivoId,setEstActivoId]=useState(null);
   var [showNuevoEst,setShowNuevoEst]=useState(false);
+  var [showBackup,setShowBackup]=useState(false);
+  var [showHistCambios,setShowHistCambios]=useState(false);
+  var [showMenuUser,setShowMenuUser]=useState(false);
+  var [ultBackup,setUltBackup]=useState(function(){return leerStorage("ganadera_ult_backup",null);});
   var [ask,confirmDialog]=useConfirm();
 
-  useEffect(function(){guardarStorage("ganadera_establecimientos_v1",establecimientos);},[establecimientos]);
+  useEffect(function(){
+    guardarStorage("ganadera_establecimientos_v1",establecimientos);
+    // Sincronizar a Firestore con debounce
+    if(user)sincronizarArriba(user.uid,{establecimientos:establecimientos});
+  },[establecimientos,user]);
 
   var estActivo=estActivoId?establecimientos.find(function(e){return e.id===estActivoId;}):null;
 
@@ -1953,55 +2894,142 @@ export default function App(){
   }
 
   return(
-    <div className="min-h-screen bg-white">
+    <div className="min-h-screen" style={{background:"#ffffff"}}>
+      <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700;900&display=swap" rel="stylesheet"/>
       <header className="px-4 pt-6 pb-4 border-b border-gray-200">
-        <div className="max-w-xl mx-auto flex items-center justify-between">
-          <div>
+        <div className="max-w-xl mx-auto flex items-center justify-between gap-2">
+          <div className="min-w-0">
             <h1 className="text-3xl font-black text-gray-900 tracking-tight">🐄 Rodeo</h1>
-            <p className="text-gray-500 text-xs mt-0.5">Gestión ganadera y agrícola</p>
+            <p className="text-gray-500 text-xs truncate">{user?user.email:"Gestión ganadera y agrícola"}</p>
           </div>
-          <button onClick={function(){setShowNuevoEst(true);}} className="bg-white border border-gray-300 active:bg-gray-50 text-gray-900 font-bold px-4 py-2.5 rounded-xl text-sm shadow-sm">+ Establecimiento</button>
+          <div className="flex gap-2 shrink-0">
+            <button onClick={function(){setShowMenuUser(true);}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12)"}} className="btn-flash bg-white border border-gray-200 text-gray-700 font-bold px-3 py-3 rounded-xl text-lg" title="Cuenta">👤</button>
+            <button onClick={function(){setShowNuevoEst(true);}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12)"}} className="btn-flash bg-emerald-300 text-white font-black px-4 py-3 rounded-xl text-sm border border-emerald-300">+ Establecimiento</button>
+          </div>
         </div>
       </header>
 
       <main className="max-w-xl mx-auto px-4 py-4 flex flex-col gap-3">
         {establecimientos.length===0&&(
-          <div className="text-center py-20">
+          <div className="text-center py-20 text-gray-400">
             <p className="text-6xl mb-4">🐄</p>
-            <p className="text-xl font-black text-gray-900 mb-2">Bienvenido a Rodeo</p>
-            <p className="text-sm text-gray-500 mb-6">Creá tu primer establecimiento para empezar</p>
-            <button onClick={function(){setShowNuevoEst(true);}} className="bg-white border border-gray-300 active:bg-gray-50 text-gray-900 font-bold px-6 py-3 rounded-2xl text-sm shadow-sm">
-              + Crear primer establecimiento
-            </button>
+            <p className="text-xl font-black text-gray-500 mb-2">Bienvenido a Rodeo</p>
+            <p className="text-sm">Creá tu primer establecimiento para empezar</p>
           </div>
         )}
+
+        {/* Banner de error de sync */}
+        {syncError&&(
+          <div className="bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 flex items-start gap-2">
+            <span className="text-xl">⚠️</span>
+            <div className="flex-1">
+              <p className="text-amber-800 font-bold text-sm">Sin conexión a la nube</p>
+              <p className="text-amber-700 text-xs">Podés seguir usando la app normal. Los cambios se sincronizarán cuando vuelva la conexión.</p>
+            </div>
+          </div>
+        )}
+
+        {/* Dashboard stats globales */}
+        {establecimientos.length>0&&(function(){
+          var totalAnim=establecimientos.reduce(function(s,e){return s+(e.lotes||[]).reduce(function(s2,l){return s2+(l.animales||[]).length;},0);},0);
+          var totalLotes=establecimientos.reduce(function(s,e){return s+(e.lotes||[]).length;},0);
+          var totalAlertas=establecimientos.reduce(function(s,e){return s+(e.alertas||[]).filter(function(a){var es=estadoAlerta(a.fechaHora,a.pasada);return es==="urgente"||es==="pronto";}).length;},0);
+          // Próximos partos (60 días)
+          var hoyD=new Date();var en60=new Date();en60.setDate(en60.getDate()+60);
+          var partosProx=0;
+          establecimientos.forEach(function(e){
+            (e.lotes||[]).forEach(function(l){
+              (l.reproSesiones||[]).filter(function(s){return s.tipo==="servicio";}).forEach(function(s){
+                (s.registros||[]).forEach(function(r){
+                  if(!r.fechaPartoProbable)return;
+                  var fp=new Date(r.fechaPartoProbable+"T12:00:00");
+                  if(fp>=hoyD&&fp<=en60)partosProx++;
+                });
+              });
+            });
+          });
+          return(
+            <div className="grid grid-cols-2 gap-2">
+              <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-3 text-center">
+                <p className="text-2xl font-black text-emerald-700">{totalAnim}</p>
+                <p className="text-[10px] text-emerald-600 uppercase font-bold">Animales totales</p>
+              </div>
+              <div className="bg-gray-50 border border-gray-200 rounded-2xl p-3 text-center">
+                <p className="text-2xl font-black text-gray-700">{totalLotes}</p>
+                <p className="text-[10px] text-gray-500 uppercase font-bold">Lotes</p>
+              </div>
+              {totalAlertas>0&&(
+                <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3 text-center">
+                  <p className="text-2xl font-black text-amber-700">🔔 {totalAlertas}</p>
+                  <p className="text-[10px] text-amber-600 uppercase font-bold">Alertas activas</p>
+                </div>
+              )}
+              {partosProx>0&&(
+                <div className="bg-rose-50 border border-rose-200 rounded-2xl p-3 text-center">
+                  <p className="text-2xl font-black text-rose-700">🐄 {partosProx}</p>
+                  <p className="text-[10px] text-rose-600 uppercase font-bold">Partos (60d)</p>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
+        {/* Recordatorio de backup */}
+        {establecimientos.length>0&&(function(){
+          var diasDesde=null;
+          if(ultBackup){
+            diasDesde=Math.floor((new Date()-new Date(ultBackup))/86400000);
+          }
+          if(!ultBackup||diasDesde>=7){
+            return(
+              <button onClick={function(){setShowBackup(true);}} className="w-full text-left bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-center gap-3">
+                <span className="text-2xl">💾</span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-amber-800 font-bold text-sm">{!ultBackup?"Nunca hiciste un backup":"Hace "+diasDesde+" días sin backup"}</p>
+                  <p className="text-amber-600 text-xs">Tocá para hacer uno ahora</p>
+                </div>
+                <span className="text-amber-600 text-xl">›</span>
+              </button>
+            );
+          }
+          return null;
+        })()}
+
         {establecimientos.map(function(est){
           var totalAnimales=(est.lotes||[]).reduce(function(s,l){return s+(l.animales||[]).length;},0);
           var alertasAct=(est.alertas||[]).filter(function(a){var e2=estadoAlerta(a.fechaHora,a.pasada);return e2==="urgente"||e2==="pronto";});
           return(
             <button key={est.id} onClick={function(){setEstActivoId(est.id);}} className="w-full text-left bg-white border border-gray-200 hover:border-gray-300 rounded-2xl overflow-hidden flex transition-all">
+              <div className="w-2 shrink-0 bg-emerald-600"/>
               <div className="flex items-center gap-4 px-4 py-4 flex-1 min-w-0">
                 <svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
                   <rect width="48" height="48" rx="14" fill="#d4eaff"/>
+                  {/* Cielo */}
                   <rect x="0" y="0" width="48" height="30" rx="14" fill="#87ceeb"/>
+                  {/* Pasto */}
                   <rect x="0" y="30" width="48" height="18" fill="#4aaa20"/>
                   <rect x="0" y="42" width="48" height="6" rx="0" fill="#3a8a18"/>
+                  {/* Árboles altos (cipreses) */}
                   <ellipse cx="10" cy="18" rx="3" ry="10" fill="#1a5a10"/>
                   <ellipse cx="16" cy="16" rx="3" ry="12" fill="#1a6a10"/>
                   <ellipse cx="22" cy="17" rx="2.5" ry="11" fill="#1a5a10"/>
+                  {/* Casa - pared */}
                   <rect x="4" y="26" width="40" height="14" rx="1" fill="#f0ede0"/>
+                  {/* Casa - techo verde */}
                   <path d="M3 27 L24 20 L45 27Z" fill="#2a6a18"/>
+                  {/* Ventanas */}
                   <rect x="7" y="28" width="5" height="5" rx="0.5" fill="#8ab0d0"/>
                   <rect x="15" y="28" width="5" height="5" rx="0.5" fill="#8ab0d0"/>
                   <rect x="33" y="28" width="5" height="5" rx="0.5" fill="#8ab0d0"/>
+                  {/* Puerta */}
                   <rect x="23" y="29" width="5" height="11" rx="0.5" fill="#8a6030"/>
                 </svg>
                 <div className="flex-1 min-w-0">
-                  <p className="font-bold text-gray-900 text-lg leading-tight truncate">{est.nombre}</p>
+                  <p className="font-black text-gray-900 text-xl leading-tight">{est.nombre}</p>
                   <p className="text-gray-500 text-sm">{(est.lotes||[]).length+" lotes · "+totalAnimales+" animales"}</p>
-                  {alertasAct.length>0&&<p className="text-amber-700 text-xs font-bold mt-0.5">{"🔔 "+alertasAct.length+" alerta"+(alertasAct.length>1?"s":"")}</p>}
+                  {alertasAct.length>0&&<p className="text-amber-400 text-xs font-bold mt-0.5">{"🔔 "+alertasAct.length+" alerta"+(alertasAct.length>1?"s":"")}</p>}
                 </div>
-                <span className="text-gray-300 text-2xl font-bold shrink-0">›</span>
+                <span className="text-gray-400 text-2xl font-bold shrink-0">›</span>
               </div>
             </button>
           );
@@ -2010,7 +3038,53 @@ export default function App(){
 
       {showNuevoEst&&(
         <Modal title="🌾 Nuevo establecimiento" onClose={function(){setShowNuevoEst(false);}}>
-          <NuevoEstForm onSave={function(nombre){setEstablecimientos(function(prev){return [...prev,{id:Date.now(),nombre,lotes:[],alertas:[],toros:[],notas:""}];});setShowNuevoEst(false);}} onClose={function(){setShowNuevoEst(false);}}/>
+          <NuevoEstForm onSave={function(nombre){logCambio("est_creado","Nuevo establecimiento "+nombre,"");setEstablecimientos(function(prev){return [...prev,{id:Date.now(),nombre,lotes:[],alertas:[],toros:[],notas:""}];});setShowNuevoEst(false);}} onClose={function(){setShowNuevoEst(false);}}/>
+        </Modal>
+      )}
+      {showBackup&&<BackupModal establecimientos={establecimientos} setEstablecimientos={setEstablecimientos} onBackupDone={function(){var f=new Date().toISOString();guardarStorage("ganadera_ult_backup",f);setUltBackup(f);}} onClose={function(){setShowBackup(false);}}/>}
+      {showHistCambios&&<HistorialCambiosModal onClose={function(){setShowHistCambios(false);}}/>}
+      {showMenuUser&&(
+        <Modal title="👤 Mi cuenta" onClose={function(){setShowMenuUser(false);}}>
+          <div className="flex flex-col gap-3">
+            <div className="bg-gray-50 border border-gray-200 rounded-xl p-3">
+              <p className="text-[10px] text-gray-500 uppercase font-bold">Sesión iniciada como</p>
+              <p className="text-gray-900 font-bold text-sm break-all">{user?user.email:""}</p>
+            </div>
+
+            <button onClick={function(){setShowMenuUser(false);setShowBackup(true);}} className="w-full text-left bg-white border border-gray-200 rounded-xl px-4 py-3 flex items-center gap-3">
+              <span className="text-2xl">💾</span>
+              <div className="flex-1">
+                <p className="text-gray-900 font-bold text-sm">Backup / Restaurar</p>
+                <p className="text-gray-500 text-xs">Exportar o importar tus datos</p>
+              </div>
+              <span className="text-gray-400 text-xl">›</span>
+            </button>
+
+            <button onClick={function(){setShowMenuUser(false);setShowHistCambios(true);}} className="w-full text-left bg-white border border-gray-200 rounded-xl px-4 py-3 flex items-center gap-3">
+              <span className="text-2xl">📜</span>
+              <div className="flex-1">
+                <p className="text-gray-900 font-bold text-sm">Historial de cambios</p>
+                <p className="text-gray-500 text-xs">Ver qué hiciste en la app</p>
+              </div>
+              <span className="text-gray-400 text-xl">›</span>
+            </button>
+
+            <button onClick={function(){
+              if(confirm("¿Cerrar sesión?\n\nTus datos están en la nube, no se pierden. Al volver a entrar con tu email los vas a ver.")){
+                desactivarSync();
+                // Limpiar datos locales para que el próximo usuario no los vea
+                try{localStorage.removeItem("ganadera_establecimientos_v1");}catch(e){}
+                signOut(auth);
+                setShowMenuUser(false);
+              }
+            }} className="w-full text-left bg-red-50 border border-red-200 rounded-xl px-4 py-3 flex items-center gap-3 mt-2">
+              <span className="text-2xl">🚪</span>
+              <div className="flex-1">
+                <p className="text-red-700 font-bold text-sm">Cerrar sesión</p>
+                <p className="text-red-500 text-xs">Salir de tu cuenta</p>
+              </div>
+            </button>
+          </div>
         </Modal>
       )}
       {confirmDialog}
@@ -2025,7 +3099,289 @@ function NuevoEstForm({onSave,onClose}){
   return(
     <div className="flex flex-col gap-3">
       <Inp label="Nombre del establecimiento" value={nombre} onChange={function(e){setNombre(e.target.value);}} inputRef={ref} placeholder="Ej: La Esperanza, Campo Norte..."/>
-      <button onClick={function(){if(!nombre.trim())return;onSave(nombre.trim());}} className="w-full bg-gray-900 active:bg-gray-700 text-white font-bold py-3 rounded-xl transition-colors">Crear</button>
+      <button onClick={function(){if(!nombre.trim())return;onSave(nombre.trim());}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08)"}} className="w-full bg-emerald-600 text-white font-black py-3 rounded-xl border border-emerald-500">Crear</button>
     </div>
+  );
+}
+
+// ── Backup Modal ──────────────────────────────────────────────────────────────
+function BackupModal({establecimientos,setEstablecimientos,onBackupDone,onClose}){
+  var [ask,confirmDialog]=useConfirm();
+  var [copiado,setCopiado]=useState(false);
+  var [modo,setModo]=useState("menu"); // menu | exportar | importar
+  var [textoImport,setTextoImport]=useState("");
+  var [errorImport,setErrorImport]=useState("");
+
+  // Stats para mostrar qué hay
+  var totalAnimales=establecimientos.reduce(function(s,e){
+    return s+(e.lotes||[]).reduce(function(s2,l){return s2+(l.animales||[]).length;},0);
+  },0);
+  var totalLotes=establecimientos.reduce(function(s,e){return s+(e.lotes||[]).length;},0);
+
+  var backupData={
+    version:1,
+    fecha:new Date().toISOString(),
+    establecimientos:establecimientos
+  };
+  var backupStr=JSON.stringify(backupData);
+
+  function marcarHecho(){if(onBackupDone)onBackupDone();}
+
+  function descargar(){
+    var hoyStr=new Date().toISOString().split("T")[0];
+    var blob=new Blob([JSON.stringify(backupData,null,2)],{type:"application/json"});
+    var url=URL.createObjectURL(blob);
+    var a=document.createElement("a");
+    a.href=url;
+    a.download="rodeo-backup-"+hoyStr+".json";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    marcarHecho();
+  }
+
+  function copiar(){
+    if(navigator.clipboard){
+      navigator.clipboard.writeText(backupStr).then(function(){
+        setCopiado(true);
+        marcarHecho();
+        setTimeout(function(){setCopiado(false);},2000);
+      });
+    }
+  }
+
+  function compartirWhatsApp(){
+    // WhatsApp tiene límite de caracteres, advertimos si es muy largo
+    if(backupStr.length>30000){
+      alert("El backup es muy grande para WhatsApp. Mejor usá 'Descargar archivo' y compartilo desde ahí.");
+      return;
+    }
+    var txt="Backup Rodeo "+new Date().toLocaleDateString("es-AR")+"\n\n"+backupStr;
+    var url="https://wa.me/?text="+encodeURIComponent(txt);
+    window.open(url,"_blank");
+    marcarHecho();
+  }
+
+  function importar(){
+    setErrorImport("");
+    if(!textoImport.trim()){setErrorImport("Pegá el backup primero");return;}
+    try{
+      var data=JSON.parse(textoImport.trim());
+      var ests;
+      // Aceptar tanto objeto con version como array directo
+      if(Array.isArray(data))ests=data;
+      else if(data.establecimientos&&Array.isArray(data.establecimientos))ests=data.establecimientos;
+      else{setErrorImport("Formato inválido");return;}
+
+      if(ests.length===0){setErrorImport("El backup está vacío");return;}
+      // Validación mínima
+      var ok=ests.every(function(e){return e&&typeof e.nombre==="string";});
+      if(!ok){setErrorImport("Formato inválido");return;}
+
+      var cuantosAnim=ests.reduce(function(s,e){return s+(e.lotes||[]).reduce(function(s2,l){return s2+(l.animales||[]).length;},0);},0);
+
+      ask("⚠️ Esto va a reemplazar TODOS tus datos actuales con "+ests.length+" establecimientos, "+cuantosAnim+" animales. ¿Continuar?",function(){
+        setEstablecimientos(ests);
+        setTextoImport("");
+        setModo("menu");
+        setTimeout(function(){alert("✅ Backup restaurado correctamente");},100);
+      });
+    }catch(e){
+      setErrorImport("No se pudo leer el texto. ¿Pegaste el backup completo?");
+    }
+  }
+
+  async function pegarDelPortapapeles(){
+    try{
+      if(navigator.clipboard&&navigator.clipboard.readText){
+        var txt=await navigator.clipboard.readText();
+        setTextoImport(txt);
+      }
+    }catch(e){}
+  }
+
+  if(modo==="menu"){
+    return(
+      <Modal title="💾 Backup y Restaurar" onClose={onClose}>
+        <div className="flex flex-col gap-3">
+          <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 flex flex-col gap-1">
+            <p className="text-[10px] text-gray-500 uppercase font-bold">Datos actuales</p>
+            <p className="text-gray-900 font-bold text-sm">{establecimientos.length+" establecimientos · "+totalLotes+" lotes · "+totalAnimales+" animales"}</p>
+          </div>
+
+          <button onClick={function(){setModo("exportar");}} className="w-full bg-emerald-300 text-white font-black py-4 rounded-xl text-base border border-emerald-300" style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12)"}}>
+            📤 Exportar backup
+          </button>
+          <p className="text-xs text-gray-500 -mt-1 px-1">Guardá una copia de toda tu data</p>
+
+          <button onClick={function(){setModo("importar");}} className="w-full bg-white border border-gray-300 text-gray-800 font-black py-4 rounded-xl text-base" style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12)"}}>
+            📥 Restaurar backup
+          </button>
+          <p className="text-xs text-gray-500 -mt-1 px-1">Cargar datos desde un backup anterior</p>
+        </div>
+      </Modal>
+    );
+  }
+
+  if(modo==="exportar"){
+    return(
+      <Modal title="📤 Exportar backup" onClose={onClose}>
+        <div className="flex flex-col gap-3">
+          <button onClick={function(){setModo("menu");}} className="self-start text-gray-600 text-sm font-bold">← Volver</button>
+
+          <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3">
+            <p className="text-emerald-800 text-sm font-bold">✓ Backup listo</p>
+            <p className="text-emerald-700 text-xs mt-0.5">{establecimientos.length+" establecimientos · "+totalAnimales+" animales"}</p>
+          </div>
+
+          <button onClick={descargar} className="w-full bg-emerald-500 text-white font-black py-3 rounded-xl text-base border border-emerald-500" style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12)"}}>
+            💾 Descargar archivo
+          </button>
+          <p className="text-xs text-gray-500 -mt-2 px-1">Guardá el archivo en tu celular o Google Drive</p>
+
+          <button onClick={compartirWhatsApp} className="w-full bg-white border border-gray-300 text-gray-800 font-bold py-3 rounded-xl text-sm">
+            📱 Compartir por WhatsApp
+          </button>
+
+          <button onClick={copiar} className={"w-full font-bold py-3 rounded-xl text-sm border "+(copiado?"bg-emerald-600 border-emerald-600 text-white":"bg-white border-gray-300 text-gray-800")}>
+            {copiado?"✓ Copiado!":"📋 Copiar al portapapeles"}
+          </button>
+
+          <div className="border-t border-gray-100 pt-3">
+            <p className="text-[10px] text-gray-500 uppercase font-bold mb-1">Texto del backup (opcional)</p>
+            <textarea readOnly value={backupStr} rows={4} className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-gray-700 text-[10px] font-mono focus:outline-none resize-none"/>
+          </div>
+        </div>
+      </Modal>
+    );
+  }
+
+  if(modo==="importar"){
+    return(
+      <Modal title="📥 Restaurar backup" onClose={onClose}>
+        <div className="flex flex-col gap-3">
+          <button onClick={function(){setModo("menu");}} className="self-start text-gray-600 text-sm font-bold">← Volver</button>
+
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
+            <p className="text-amber-800 text-sm font-bold">⚠️ Atención</p>
+            <p className="text-amber-700 text-xs mt-0.5">Restaurar va a reemplazar TODOS tus datos actuales. Si querés, exportá primero un backup de lo que tenés ahora.</p>
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <label className="text-[10px] text-gray-500 font-bold uppercase">Pegá acá el texto del backup</label>
+            <textarea value={textoImport} onChange={function(e){setTextoImport(e.target.value);setErrorImport("");}} rows={6} placeholder='{"version":1,"fecha":"...","establecimientos":[...]}'
+              className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2 text-gray-700 text-xs font-mono focus:outline-none focus:border-gray-900 resize-none placeholder-gray-400"/>
+          </div>
+
+          <button onClick={pegarDelPortapapeles} className="w-full bg-white border border-gray-300 text-gray-800 font-bold py-2 rounded-xl text-sm">
+            📋 Pegar desde portapapeles
+          </button>
+
+          {errorImport&&<p className="text-red-600 text-sm font-bold">⚠️ {errorImport}</p>}
+
+          <button onClick={importar} disabled={!textoImport.trim()} className={"w-full font-black py-3 rounded-xl text-base border "+(textoImport.trim()?"bg-emerald-500 border-emerald-500 text-white":"bg-gray-100 border-gray-200 text-gray-400")} style={textoImport.trim()?{boxShadow:"0 1px 3px rgba(0,0,0,0.12)"}:{}}>
+            ✓ Restaurar datos
+          </button>
+
+          {confirmDialog}
+        </div>
+      </Modal>
+    );
+  }
+
+  return null;
+}
+
+// ── Historial de Cambios Modal ────────────────────────────────────────────────
+function HistorialCambiosModal({onClose}){
+  var [ask,confirmDialog]=useConfirm();
+  var [logs,setLogs]=useState(function(){return leerStorage("ganadera_cambios_v1",[]);});
+  var [filtro,setFiltro]=useState("");
+
+  var tiposLabels={
+    animal_creado:"🐄 Animal creado",
+    lote_creado:"📁 Lote creado",
+    est_creado:"🏡 Establecimiento creado",
+    sesion_pesaje:"⚖️ Sesión pesaje",
+    animales_movidos:"🔀 Animales movidos",
+    otro:"📝 Otro"
+  };
+
+  function iconoTipo(t){
+    if(t==="animal_creado")return "🐄";
+    if(t==="lote_creado")return "📁";
+    if(t==="est_creado")return "🏡";
+    if(t==="sesion_pesaje")return "⚖️";
+    if(t==="animales_movidos")return "🔀";
+    return "📝";
+  }
+
+  function colorTipo(t){
+    if(t==="animal_creado")return "bg-emerald-50 border-emerald-200";
+    if(t==="lote_creado")return "bg-blue-50 border-blue-200";
+    if(t==="est_creado")return "bg-purple-50 border-purple-200";
+    if(t==="sesion_pesaje")return "bg-sky-50 border-sky-200";
+    if(t==="animales_movidos")return "bg-amber-50 border-amber-200";
+    return "bg-gray-50 border-gray-200";
+  }
+
+  function tiempoRelativo(iso){
+    var diff=(new Date()-new Date(iso))/1000;
+    if(diff<60)return "hace unos segundos";
+    if(diff<3600)return "hace "+Math.floor(diff/60)+" min";
+    if(diff<86400)return "hace "+Math.floor(diff/3600)+" h";
+    var dias=Math.floor(diff/86400);
+    if(dias===1)return "ayer";
+    if(dias<30)return "hace "+dias+" días";
+    return new Date(iso).toLocaleDateString("es-AR");
+  }
+
+  var filtrados=filtro?logs.filter(function(l){return l.tipo===filtro;}):logs;
+
+  return(
+    <Modal title="📜 Historial de cambios" onClose={onClose}>
+      <div className="flex flex-col gap-3">
+        <p className="text-xs text-gray-500">Últimos {logs.length} cambios registrados</p>
+
+        {logs.length>0&&(
+          <div className="flex gap-1 flex-wrap">
+            <button onClick={function(){setFiltro("");}} className={"px-3 py-1.5 rounded-lg text-xs font-bold border "+(filtro===""?"bg-gray-900 border-gray-900 text-white":"bg-white border-gray-200 text-gray-600")}>Todos</button>
+            {Object.keys(tiposLabels).filter(function(t){return logs.some(function(l){return l.tipo===t;});}).map(function(t){
+              return <button key={t} onClick={function(){setFiltro(t);}} className={"px-3 py-1.5 rounded-lg text-xs font-bold border "+(filtro===t?"bg-gray-900 border-gray-900 text-white":"bg-white border-gray-200 text-gray-600")}>{tiposLabels[t]}</button>;
+            })}
+          </div>
+        )}
+
+        {logs.length>0&&(
+          <button onClick={function(){ask("¿Borrar todo el historial de cambios?",function(){guardarStorage("ganadera_cambios_v1",[]);setLogs([]);});}} className="self-start text-xs text-red-600 border border-red-200 bg-red-50 px-3 py-1.5 rounded-lg">🗑 Borrar historial</button>
+        )}
+
+        {filtrados.length===0&&(
+          <div className="text-center py-10 text-gray-400">
+            <p className="text-4xl mb-2">📜</p>
+            <p className="text-sm">Sin cambios registrados aún</p>
+          </div>
+        )}
+
+        <div className="flex flex-col gap-1.5 max-h-96 overflow-y-auto">
+          {filtrados.map(function(l){
+            return(
+              <div key={l.id} className={"rounded-xl px-3 py-2 border "+colorTipo(l.tipo)}>
+                <div className="flex items-start gap-2">
+                  <span className="text-xl shrink-0">{iconoTipo(l.tipo)}</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-gray-900 font-bold text-sm">{l.texto}</p>
+                    {l.detalle&&<p className="text-gray-600 text-xs">{l.detalle}</p>}
+                    <p className="text-gray-400 text-[10px] mt-0.5">{tiempoRelativo(l.fecha)}</p>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {confirmDialog}
+      </div>
+    </Modal>
   );
 }
