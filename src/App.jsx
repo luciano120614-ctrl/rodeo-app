@@ -2644,6 +2644,53 @@ export default function AppConAuth(){
   var [syncStatus,setSyncStatus]=useState("idle"); // idle | cargando | listo | error
   var [syncError,setSyncError]=useState("");
 
+  // PWA: registrar service worker y manifest (se ejecuta al abrir la app, antes del login)
+  useEffect(function(){
+    try{
+      var iconSvg='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="96" fill="#10b981"/><text x="50%" y="58%" font-size="320" text-anchor="middle" dominant-baseline="middle">🐄</text></svg>';
+      var iconUrl="data:image/svg+xml;base64,"+btoa(iconSvg);
+
+      var manifest={
+        name:"Rodeo - Gestión Ganadera",
+        short_name:"Rodeo",
+        description:"Gestión ganadera y agrícola",
+        start_url:"/",
+        display:"standalone",
+        orientation:"portrait",
+        background_color:"#ffffff",
+        theme_color:"#10b981",
+        icons:[
+          {src:iconUrl,sizes:"192x192",type:"image/svg+xml",purpose:"any maskable"},
+          {src:iconUrl,sizes:"512x512",type:"image/svg+xml",purpose:"any maskable"}
+        ]
+      };
+      var blob=new Blob([JSON.stringify(manifest)],{type:"application/json"});
+      var manifestUrl=URL.createObjectURL(blob);
+
+      var linkManifest=document.querySelector('link[rel="manifest"]');
+      if(!linkManifest){linkManifest=document.createElement("link");linkManifest.rel="manifest";document.head.appendChild(linkManifest);}
+      linkManifest.href=manifestUrl;
+
+      var appleIcon=document.querySelector('link[rel="apple-touch-icon"]');
+      if(!appleIcon){appleIcon=document.createElement("link");appleIcon.rel="apple-touch-icon";document.head.appendChild(appleIcon);}
+      appleIcon.href=iconUrl;
+
+      var themeColor=document.querySelector('meta[name="theme-color"]');
+      if(!themeColor){themeColor=document.createElement("meta");themeColor.name="theme-color";document.head.appendChild(themeColor);}
+      themeColor.content="#10b981";
+
+      // Service worker con caché para funcionar offline
+      // Se registra desde /sw.js (archivo real en public/) para que pueda interceptar cargas iniciales
+      if("serviceWorker" in navigator){
+        window.addEventListener("load",function(){
+          navigator.serviceWorker.register("/sw.js").catch(function(err){
+            console.log("SW registration failed:",err);
+          });
+        });
+      }
+    }catch(e){}
+  },[]);
+
   useEffect(function(){
     var unsub=onAuthStateChanged(auth,function(u){
       setUser(u);
@@ -2662,7 +2709,28 @@ export default function AppConAuth(){
     setSyncStatus("cargando");
     setSyncError("");
 
-    getDoc(refDatosUsuario(user.uid)).then(function(snap){
+    // Detectar si estamos offline al arrancar
+    var estaOffline=typeof navigator!=="undefined"&&navigator.onLine===false;
+
+    // getDoc devuelve desde la caché si está offline (gracias a persistentLocalCache)
+    // Pero si no hay nada en caché y no hay internet, se cuelga. Usamos timeout.
+    function conTimeout(promesa,ms){
+      return new Promise(function(resolve,reject){
+        var timer=setTimeout(function(){reject(new Error("timeout"));},ms);
+        promesa.then(function(v){clearTimeout(timer);resolve(v);},
+                     function(e){clearTimeout(timer);reject(e);});
+      });
+    }
+
+    // Si estamos offline, usamos directamente los datos locales sin esperar Firestore
+    if(estaOffline){
+      console.log("Iniciando offline, usando datos locales");
+      activarSync(user.uid);
+      setSyncStatus("listo");
+      return function(){desactivarSync();};
+    }
+
+    conTimeout(getDoc(refDatosUsuario(user.uid)),8000).then(function(snap){
       if(snap.exists()){
         // Hay datos en la nube: los bajamos a localStorage
         var data=snap.data();
@@ -2684,10 +2752,9 @@ export default function AppConAuth(){
       setSyncStatus("listo");
     }).catch(function(err){
       console.error("Error cargando datos:",err);
-      setSyncError(err.message||"Error al conectar con la nube");
-      // Igual activamos con datos locales para no bloquear al usuario
+      // Si falla, usar datos locales y no bloquear al usuario
       activarSync(user.uid);
-      setSyncStatus("error");
+      setSyncStatus("listo"); // No mostramos error, dejamos trabajar igual
     });
 
     return function(){desactivarSync();};
@@ -2730,54 +2797,6 @@ function AppLogueado({user,syncError}){
     return function(){document.head.removeChild(s);};
   },[]);
 
-  // PWA: inyectar manifest, theme-color, apple-touch-icon y registrar service worker
-  useEffect(function(){
-    try{
-      // Icono SVG (vaca verde) convertido a data URL
-      var iconSvg='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="96" fill="#10b981"/><text x="50%" y="58%" font-size="320" text-anchor="middle" dominant-baseline="middle">🐄</text></svg>';
-      var iconUrl="data:image/svg+xml;base64,"+btoa(iconSvg);
-
-      var manifest={
-        name:"Rodeo - Gestión Ganadera",
-        short_name:"Rodeo",
-        description:"Gestión ganadera y agrícola",
-        start_url:"/",
-        display:"standalone",
-        orientation:"portrait",
-        background_color:"#ffffff",
-        theme_color:"#10b981",
-        icons:[
-          {src:iconUrl,sizes:"192x192",type:"image/svg+xml",purpose:"any maskable"},
-          {src:iconUrl,sizes:"512x512",type:"image/svg+xml",purpose:"any maskable"}
-        ]
-      };
-      var blob=new Blob([JSON.stringify(manifest)],{type:"application/json"});
-      var manifestUrl=URL.createObjectURL(blob);
-
-      // Link al manifest
-      var linkManifest=document.querySelector('link[rel="manifest"]');
-      if(!linkManifest){linkManifest=document.createElement("link");linkManifest.rel="manifest";document.head.appendChild(linkManifest);}
-      linkManifest.href=manifestUrl;
-
-      // Apple touch icon
-      var appleIcon=document.querySelector('link[rel="apple-touch-icon"]');
-      if(!appleIcon){appleIcon=document.createElement("link");appleIcon.rel="apple-touch-icon";document.head.appendChild(appleIcon);}
-      appleIcon.href=iconUrl;
-
-      // Theme color
-      var themeColor=document.querySelector('meta[name="theme-color"]');
-      if(!themeColor){themeColor=document.createElement("meta");themeColor.name="theme-color";document.head.appendChild(themeColor);}
-      themeColor.content="#10b981";
-
-      // Service worker mínimo (solo para hacer la app "instalable" oficialmente)
-      if("serviceWorker" in navigator){
-        var swCode="self.addEventListener('install',function(e){self.skipWaiting();});self.addEventListener('activate',function(e){e.waitUntil(self.clients.claim());});self.addEventListener('fetch',function(e){});";
-        var swBlob=new Blob([swCode],{type:"application/javascript"});
-        var swUrl=URL.createObjectURL(swBlob);
-        navigator.serviceWorker.register(swUrl).catch(function(){});
-      }
-    }catch(e){}
-  },[]);
   var [establecimientos,setEstablecimientos]=useState(function(){
     var saved=leerStorage("ganadera_establecimientos_v1",null);
     if(saved)return saved;
