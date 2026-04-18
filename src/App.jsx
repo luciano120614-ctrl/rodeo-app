@@ -2701,38 +2701,37 @@ export default function AppConAuth(){
   },[]);
 
   useEffect(function(){
-    var offline=typeof navigator!=="undefined"&&navigator.onLine===false;
     var cache=leerStorage("rodeo_user_cache",null);
 
-    // Si arranco offline con cache, no llamo a onAuthStateChanged porque se puede colgar.
-    // Esperamos a que vuelva online para sincronizar.
-    if(offline&&cache){
-      setUser(cache);
-      setLoadingAuth(false);
-      // Cuando vuelva a haber conexión, enganchamos onAuthStateChanged
-      var onOnline=function(){
-        window.removeEventListener("online",onOnline);
-        onAuthStateChanged(auth,function(u){
-          if(u){
-            try{guardarStorage("rodeo_user_cache",{uid:u.uid,email:u.email});}catch(e){}
-            setUser(function(prev){
-              if(prev&&prev.uid===u.uid)return prev;
-              return u;
-            });
-          }else{
-            // Sesión expiró realmente al volver online
-            setUser(null);
-            desactivarSync();
-            setSyncStatus("idle");
-            try{localStorage.removeItem("rodeo_user_cache");}catch(e){}
-          }
-        });
-      };
-      window.addEventListener("online",onOnline);
-      return function(){window.removeEventListener("online",onOnline);};
+    // Si tengo cache, NO espero a Firebase. Uso el cache directamente y engancho Firebase en background.
+    // Esto evita el bug donde onAuthStateChanged no dispara sin internet.
+    if(cache){
+      // Engancho Firebase pero sin bloquear - lo hago async con un pequeño delay
+      setTimeout(function(){
+        try{
+          onAuthStateChanged(auth,function(u){
+            if(u){
+              try{guardarStorage("rodeo_user_cache",{uid:u.uid,email:u.email});}catch(e){}
+              setUser(function(prev){
+                if(prev&&prev.uid===u.uid)return prev;
+                return u;
+              });
+            }else{
+              // Firebase dice null. Solo actuamos si estamos realmente online.
+              if(navigator.onLine){
+                setUser(null);
+                desactivarSync();
+                setSyncStatus("idle");
+                try{localStorage.removeItem("rodeo_user_cache");}catch(e){}
+              }
+            }
+          });
+        }catch(e){console.error("Error enganchando auth",e);}
+      },100);
+      return;
     }
 
-    // Flujo normal (online)
+    // Sin cache: flujo normal (primera vez o después de cerrar sesión)
     var unsub=onAuthStateChanged(auth,function(u){
       if(u){
         try{guardarStorage("rodeo_user_cache",{uid:u.uid,email:u.email});}catch(e){}
@@ -2742,12 +2741,6 @@ export default function AppConAuth(){
         });
         setLoadingAuth(false);
       }else{
-        var off=typeof navigator!=="undefined"&&navigator.onLine===false;
-        var c=leerStorage("rodeo_user_cache",null);
-        if(off&&c){
-          setLoadingAuth(false);
-          return;
-        }
         setUser(null);
         setLoadingAuth(false);
         desactivarSync();
@@ -2764,53 +2757,47 @@ export default function AppConAuth(){
     // Si ya sincronizamos este uid en esta sesión, no repetir
     if(syncDoneForUid===user.uid&&syncStatus==="listo")return;
 
-    setSyncStatus("cargando");
-    setSyncError("");
+    // SIEMPRE activamos sync inmediatamente con datos locales.
+    // El getDoc se hace en background sin bloquear la UI.
+    activarSync(user.uid);
+    setSyncStatus("listo");
+    setSyncDoneForUid(user.uid);
 
-    // Detectar si estamos offline al arrancar
-    var estaOffline=typeof navigator!=="undefined"&&navigator.onLine===false;
+    // Intentamos traer datos de la nube en background, solo si estamos online
+    if(navigator.onLine){
+      function conTimeout(promesa,ms){
+        return new Promise(function(resolve,reject){
+          var timer=setTimeout(function(){reject(new Error("timeout"));},ms);
+          promesa.then(function(v){clearTimeout(timer);resolve(v);},
+                       function(e){clearTimeout(timer);reject(e);});
+        });
+      }
 
-    function conTimeout(promesa,ms){
-      return new Promise(function(resolve,reject){
-        var timer=setTimeout(function(){reject(new Error("timeout"));},ms);
-        promesa.then(function(v){clearTimeout(timer);resolve(v);},
-                     function(e){clearTimeout(timer);reject(e);});
+      conTimeout(getDoc(refDatosUsuario(user.uid)),8000).then(function(snap){
+        if(snap.exists()){
+          var data=snap.data();
+          if(data.establecimientos&&Array.isArray(data.establecimientos)){
+            // Solo sobreescribir locales si los de la nube son más recientes o diferentes
+            var locales=leerStorage("ganadera_establecimientos_v1",null);
+            if(!locales||JSON.stringify(locales)!==JSON.stringify(data.establecimientos)){
+              guardarStorage("ganadera_establecimientos_v1",data.establecimientos);
+              // Forzar actualización de la UI recargando
+              window.location.reload();
+            }
+          }
+        }else{
+          var locales=leerStorage("ganadera_establecimientos_v1",null);
+          if(locales&&Array.isArray(locales)&&locales.length>0){
+            return setDoc(refDatosUsuario(user.uid),{
+              establecimientos:locales,
+              actualizado:new Date().toISOString()
+            });
+          }
+        }
+      }).catch(function(err){
+        console.log("Sync background falló (normal si no hay internet):",err.message);
       });
     }
-
-    // Si estamos offline, usamos directamente los datos locales sin esperar Firestore
-    if(estaOffline){
-      activarSync(user.uid);
-      setSyncStatus("listo");
-      setSyncDoneForUid(user.uid);
-      return function(){};
-    }
-
-    conTimeout(getDoc(refDatosUsuario(user.uid)),8000).then(function(snap){
-      if(snap.exists()){
-        var data=snap.data();
-        if(data.establecimientos&&Array.isArray(data.establecimientos)){
-          guardarStorage("ganadera_establecimientos_v1",data.establecimientos);
-        }
-      }else{
-        var locales=leerStorage("ganadera_establecimientos_v1",null);
-        if(locales&&Array.isArray(locales)&&locales.length>0){
-          return setDoc(refDatosUsuario(user.uid),{
-            establecimientos:locales,
-            actualizado:new Date().toISOString()
-          });
-        }
-      }
-    }).then(function(){
-      activarSync(user.uid);
-      setSyncStatus("listo");
-      setSyncDoneForUid(user.uid);
-    }).catch(function(err){
-      console.error("Error cargando datos:",err);
-      activarSync(user.uid);
-      setSyncStatus("listo");
-      setSyncDoneForUid(user.uid);
-    });
 
     return function(){};
   },[user]);
