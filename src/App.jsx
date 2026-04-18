@@ -2639,10 +2639,13 @@ function LoginScreen(){
 
 // ── App con autenticación ─────────────────────────────────────────────────────
 export default function AppConAuth(){
-  var [user,setUser]=useState(null);
-  var [loadingAuth,setLoadingAuth]=useState(true);
+  // Intento recuperar info del usuario guardada previamente (para no esperar a Firebase si estamos offline)
+  var userCache=leerStorage("rodeo_user_cache",null);
+  var [user,setUser]=useState(userCache);
+  var [loadingAuth,setLoadingAuth]=useState(!userCache); // Si tengo cache, no muestro loading
   var [syncStatus,setSyncStatus]=useState("idle"); // idle | cargando | listo | error
   var [syncError,setSyncError]=useState("");
+  var [syncDoneForUid,setSyncDoneForUid]=useState(userCache?userCache.uid:null);
 
   // PWA: registrar service worker y manifest (se ejecuta al abrir la app, antes del login)
   useEffect(function(){
@@ -2695,25 +2698,32 @@ export default function AppConAuth(){
     var unsub=onAuthStateChanged(auth,function(u){
       setUser(u);
       setLoadingAuth(false);
-      if(!u){
+      if(u){
+        // Guardo info mínima para recuperar sesión offline (evita 30s de espera)
+        try{
+          guardarStorage("rodeo_user_cache",{uid:u.uid,email:u.email});
+        }catch(e){}
+      }else{
         desactivarSync();
         setSyncStatus("idle");
+        try{localStorage.removeItem("rodeo_user_cache");}catch(e){}
       }
     });
     return unsub;
   },[]);
 
-  // Cuando el usuario está logueado, cargar datos desde Firestore
+  // Cuando el usuario está logueado, cargar datos desde Firestore (solo una vez por UID)
   useEffect(function(){
     if(!user)return;
+    // Si ya sincronizamos este uid en esta sesión, no repetir
+    if(syncDoneForUid===user.uid&&syncStatus==="listo")return;
+
     setSyncStatus("cargando");
     setSyncError("");
 
     // Detectar si estamos offline al arrancar
     var estaOffline=typeof navigator!=="undefined"&&navigator.onLine===false;
 
-    // getDoc devuelve desde la caché si está offline (gracias a persistentLocalCache)
-    // Pero si no hay nada en caché y no hay internet, se cuelga. Usamos timeout.
     function conTimeout(promesa,ms){
       return new Promise(function(resolve,reject){
         var timer=setTimeout(function(){reject(new Error("timeout"));},ms);
@@ -2724,21 +2734,19 @@ export default function AppConAuth(){
 
     // Si estamos offline, usamos directamente los datos locales sin esperar Firestore
     if(estaOffline){
-      console.log("Iniciando offline, usando datos locales");
       activarSync(user.uid);
       setSyncStatus("listo");
-      return function(){desactivarSync();};
+      setSyncDoneForUid(user.uid);
+      return function(){};
     }
 
     conTimeout(getDoc(refDatosUsuario(user.uid)),8000).then(function(snap){
       if(snap.exists()){
-        // Hay datos en la nube: los bajamos a localStorage
         var data=snap.data();
         if(data.establecimientos&&Array.isArray(data.establecimientos)){
           guardarStorage("ganadera_establecimientos_v1",data.establecimientos);
         }
       }else{
-        // No hay datos en la nube. Si tenemos datos locales, los subimos
         var locales=leerStorage("ganadera_establecimientos_v1",null);
         if(locales&&Array.isArray(locales)&&locales.length>0){
           return setDoc(refDatosUsuario(user.uid),{
@@ -2750,15 +2758,21 @@ export default function AppConAuth(){
     }).then(function(){
       activarSync(user.uid);
       setSyncStatus("listo");
+      setSyncDoneForUid(user.uid);
     }).catch(function(err){
       console.error("Error cargando datos:",err);
-      // Si falla, usar datos locales y no bloquear al usuario
       activarSync(user.uid);
-      setSyncStatus("listo"); // No mostramos error, dejamos trabajar igual
+      setSyncStatus("listo");
+      setSyncDoneForUid(user.uid);
     });
 
-    return function(){desactivarSync();};
+    return function(){};
   },[user]);
+
+  // Desactivar sync al desmontar
+  useEffect(function(){
+    return function(){desactivarSync();};
+  },[]);
 
   if(loadingAuth){
     return(
