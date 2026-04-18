@@ -2,7 +2,7 @@
 // Configuración de Firebase para la app Rodeo
 
 import { initializeApp } from "firebase/app";
-import { getAuth } from "firebase/auth";
+import { getAuth, setPersistence, browserLocalPersistence, indexedDBLocalPersistence } from "firebase/auth";
 import { initializeFirestore, persistentLocalCache, persistentSingleTabManager } from "firebase/firestore";
 
 const firebaseConfig = {
@@ -15,7 +15,13 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
+
+// Auth con persistencia local (mantiene sesión aunque no haya internet)
 export const auth = getAuth(app);
+// Intentamos indexedDB primero (más confiable offline), sino localStorage
+setPersistence(auth, indexedDBLocalPersistence).catch(function(){
+  setPersistence(auth, browserLocalPersistence).catch(function(){});
+});
 
 // Firestore con persistencia offline (funciona sin internet)
 export const db = initializeFirestore(app, {
