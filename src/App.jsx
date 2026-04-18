@@ -2643,9 +2643,15 @@ export default function AppConAuth(){
   var userCache=leerStorage("rodeo_user_cache",null);
   var [user,setUser]=useState(userCache);
   var [loadingAuth,setLoadingAuth]=useState(!userCache); // Si tengo cache, no muestro loading
-  var [syncStatus,setSyncStatus]=useState("idle"); // idle | cargando | listo | error
+  // Si ya hay user cache, empezamos como "listo" y sincronizamos en background
+  var [syncStatus,setSyncStatus]=useState(userCache?"listo":"idle");
   var [syncError,setSyncError]=useState("");
   var [syncDoneForUid,setSyncDoneForUid]=useState(userCache?userCache.uid:null);
+
+  // Si tengo cache, activo el sync inmediatamente (para que los cambios se guarden)
+  useEffect(function(){
+    if(userCache)activarSync(userCache.uid);
+  },[]);
 
   // PWA: registrar service worker y manifest (se ejecuta al abrir la app, antes del login)
   useEffect(function(){
@@ -2696,14 +2702,29 @@ export default function AppConAuth(){
 
   useEffect(function(){
     var unsub=onAuthStateChanged(auth,function(u){
-      setUser(u);
-      setLoadingAuth(false);
       if(u){
         // Guardo info mínima para recuperar sesión offline (evita 30s de espera)
         try{
           guardarStorage("rodeo_user_cache",{uid:u.uid,email:u.email});
         }catch(e){}
+        // Solo actualizamos user si cambió el uid o no había user
+        setUser(function(prev){
+          if(prev&&prev.uid===u.uid)return prev; // mismo user, no re-renderizar
+          return u;
+        });
+        setLoadingAuth(false);
       }else{
+        // Firebase dice que no hay user. PERO: si estamos offline y tenemos cache, ignoramos
+        var offline=typeof navigator!=="undefined"&&navigator.onLine===false;
+        var cache=leerStorage("rodeo_user_cache",null);
+        if(offline&&cache){
+          // Mantenemos la sesión del cache, no tiramos al user al login
+          setLoadingAuth(false);
+          return;
+        }
+        // Realmente se cerró sesión
+        setUser(null);
+        setLoadingAuth(false);
         desactivarSync();
         setSyncStatus("idle");
         try{localStorage.removeItem("rodeo_user_cache");}catch(e){}
