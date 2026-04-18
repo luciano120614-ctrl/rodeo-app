@@ -1,4 +1,6 @@
 import {useState,useEffect,useRef,useCallback} from "react";
+import { auth } from "./firebase";
+import { onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, sendPasswordResetEmail } from "firebase/auth";
 
 const flashStyle = `
 @keyframes btnPulse {
@@ -2458,7 +2460,173 @@ function VistaEstablecimiento({estId,establecimientos,setEstablecimientos,onBack
 }
 
 // ── App ───────────────────────────────────────────────────────────────────────
-export default function App(){
+// ── Pantalla de Login ─────────────────────────────────────────────────────────
+function LoginScreen(){
+  var [modo,setModo]=useState("login"); // login | registro | recuperar
+  var [email,setEmail]=useState("");
+  var [password,setPassword]=useState("");
+  var [password2,setPassword2]=useState("");
+  var [error,setError]=useState("");
+  var [loading,setLoading]=useState(false);
+  var [msgExito,setMsgExito]=useState("");
+
+  function traducirError(code){
+    if(code==="auth/invalid-email")return "El email no es válido";
+    if(code==="auth/user-not-found")return "No hay una cuenta con ese email";
+    if(code==="auth/wrong-password"||code==="auth/invalid-credential")return "Email o contraseña incorrectos";
+    if(code==="auth/email-already-in-use")return "Ya existe una cuenta con ese email";
+    if(code==="auth/weak-password")return "La contraseña es muy débil (mínimo 6 caracteres)";
+    if(code==="auth/network-request-failed")return "Sin conexión a internet";
+    if(code==="auth/too-many-requests")return "Demasiados intentos. Esperá unos minutos";
+    return "Error: "+code;
+  }
+
+  async function ingresar(){
+    setError("");setMsgExito("");
+    if(!email.trim()||!password){setError("Completá email y contraseña");return;}
+    setLoading(true);
+    try{
+      await signInWithEmailAndPassword(auth,email.trim(),password);
+    }catch(e){
+      setError(traducirError(e.code));
+      setLoading(false);
+    }
+  }
+
+  async function registrar(){
+    setError("");setMsgExito("");
+    if(!email.trim()||!password){setError("Completá todos los campos");return;}
+    if(password.length<6){setError("La contraseña debe tener al menos 6 caracteres");return;}
+    if(password!==password2){setError("Las contraseñas no coinciden");return;}
+    setLoading(true);
+    try{
+      await createUserWithEmailAndPassword(auth,email.trim(),password);
+    }catch(e){
+      setError(traducirError(e.code));
+      setLoading(false);
+    }
+  }
+
+  async function recuperar(){
+    setError("");setMsgExito("");
+    if(!email.trim()){setError("Ingresá tu email");return;}
+    setLoading(true);
+    try{
+      await sendPasswordResetEmail(auth,email.trim());
+      setMsgExito("Te mandamos un email para recuperar tu contraseña. Revisá tu bandeja de entrada.");
+      setLoading(false);
+    }catch(e){
+      setError(traducirError(e.code));
+      setLoading(false);
+    }
+  }
+
+  return(
+    <div className="min-h-screen bg-white flex flex-col">
+      <div className="max-w-sm w-full mx-auto px-4 pt-16 pb-8 flex flex-col gap-4">
+        <div className="text-center mb-4">
+          <p className="text-6xl mb-3">🐄</p>
+          <h1 className="text-3xl font-black text-gray-900 tracking-tight">Rodeo</h1>
+          <p className="text-gray-500 text-sm mt-1">Gestión ganadera y agrícola</p>
+        </div>
+
+        <div className="bg-gray-50 border border-gray-200 rounded-2xl p-5 flex flex-col gap-3">
+          <h2 className="text-lg font-bold text-gray-900 text-center">
+            {modo==="login"?"Iniciar sesión":modo==="registro"?"Crear cuenta":"Recuperar contraseña"}
+          </h2>
+
+          <div className="flex flex-col gap-1">
+            <label className="text-[10px] text-gray-500 font-bold uppercase">Email</label>
+            <input type="email" value={email} onChange={function(e){setEmail(e.target.value);}} placeholder="tu@email.com"
+              autoComplete="email" autoCapitalize="none"
+              className="bg-white border border-gray-200 rounded-xl px-3 py-3 text-gray-900 text-base focus:outline-none focus:border-gray-900"/>
+          </div>
+
+          {modo!=="recuperar"&&(
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] text-gray-500 font-bold uppercase">Contraseña</label>
+              <input type="password" value={password} onChange={function(e){setPassword(e.target.value);}} placeholder="Al menos 6 caracteres"
+                className="bg-white border border-gray-200 rounded-xl px-3 py-3 text-gray-900 text-base focus:outline-none focus:border-gray-900"/>
+            </div>
+          )}
+
+          {modo==="registro"&&(
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] text-gray-500 font-bold uppercase">Repetir contraseña</label>
+              <input type="password" value={password2} onChange={function(e){setPassword2(e.target.value);}}
+                className="bg-white border border-gray-200 rounded-xl px-3 py-3 text-gray-900 text-base focus:outline-none focus:border-gray-900"/>
+            </div>
+          )}
+
+          {error&&<div className="bg-red-50 border border-red-200 text-red-700 rounded-xl px-3 py-2 text-sm font-bold">⚠️ {error}</div>}
+          {msgExito&&<div className="bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-xl px-3 py-2 text-sm font-bold">✅ {msgExito}</div>}
+
+          <button onClick={modo==="login"?ingresar:modo==="registro"?registrar:recuperar} disabled={loading}
+            style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12)"}}
+            className={"w-full font-black py-3 rounded-xl text-base border "+(loading?"bg-gray-300 border-gray-300 text-gray-500":"bg-emerald-500 border-emerald-500 text-white")}>
+            {loading?"Procesando...":modo==="login"?"Entrar":modo==="registro"?"Crear cuenta":"Enviar email"}
+          </button>
+
+          {modo==="login"&&(
+            <>
+              <button onClick={function(){setModo("registro");setError("");setMsgExito("");}} className="text-gray-700 text-sm font-bold text-center py-1">
+                ¿No tenés cuenta? <span className="text-emerald-600">Registrate</span>
+              </button>
+              <button onClick={function(){setModo("recuperar");setError("");setMsgExito("");}} className="text-gray-500 text-xs text-center">
+                Olvidé mi contraseña
+              </button>
+            </>
+          )}
+          {modo==="registro"&&(
+            <button onClick={function(){setModo("login");setError("");setMsgExito("");}} className="text-gray-700 text-sm font-bold text-center py-1">
+              ¿Ya tenés cuenta? <span className="text-emerald-600">Iniciá sesión</span>
+            </button>
+          )}
+          {modo==="recuperar"&&(
+            <button onClick={function(){setModo("login");setError("");setMsgExito("");}} className="text-gray-700 text-sm font-bold text-center py-1">
+              ← Volver al login
+            </button>
+          )}
+        </div>
+
+        <p className="text-center text-gray-400 text-xs mt-2">
+          Al registrarte, aceptás guardar tus datos de forma segura.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ── App con autenticación ─────────────────────────────────────────────────────
+export default function AppConAuth(){
+  var [user,setUser]=useState(null);
+  var [loadingAuth,setLoadingAuth]=useState(true);
+
+  useEffect(function(){
+    var unsub=onAuthStateChanged(auth,function(u){
+      setUser(u);
+      setLoadingAuth(false);
+    });
+    return unsub;
+  },[]);
+
+  if(loadingAuth){
+    return(
+      <div className="min-h-screen bg-white flex items-center justify-center">
+        <div className="text-center">
+          <p className="text-5xl mb-3">🐄</p>
+          <p className="text-gray-500 text-sm">Cargando...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if(!user)return <LoginScreen/>;
+  return <AppLogueado user={user}/>;
+}
+
+// ── App logueada (lo que era antes el App) ────────────────────────────────────
+function AppLogueado({user}){
   useEffect(function(){
     var s=document.createElement("style");
     s.innerHTML=flashStyle;
@@ -2527,6 +2695,7 @@ export default function App(){
   var [showNuevoEst,setShowNuevoEst]=useState(false);
   var [showBackup,setShowBackup]=useState(false);
   var [showHistCambios,setShowHistCambios]=useState(false);
+  var [showMenuUser,setShowMenuUser]=useState(false);
   var [ultBackup,setUltBackup]=useState(function(){return leerStorage("ganadera_ult_backup",null);});
   var [ask,confirmDialog]=useConfirm();
 
@@ -2552,11 +2721,10 @@ export default function App(){
         <div className="max-w-xl mx-auto flex items-center justify-between gap-2">
           <div className="min-w-0">
             <h1 className="text-3xl font-black text-gray-900 tracking-tight">🐄 Rodeo</h1>
-            <p className="text-gray-500 text-xs">Gestión ganadera y agrícola</p>
+            <p className="text-gray-500 text-xs truncate">{user?user.email:"Gestión ganadera y agrícola"}</p>
           </div>
           <div className="flex gap-2 shrink-0">
-            <button onClick={function(){setShowHistCambios(true);}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12)"}} className="btn-flash bg-white border border-gray-200 text-gray-700 font-bold px-3 py-3 rounded-xl text-lg" title="Historial de cambios">📜</button>
-            <button onClick={function(){setShowBackup(true);}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12)"}} className="btn-flash bg-white border border-gray-200 text-gray-700 font-bold px-3 py-3 rounded-xl text-lg" title="Backup / Restaurar">💾</button>
+            <button onClick={function(){setShowMenuUser(true);}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12)"}} className="btn-flash bg-white border border-gray-200 text-gray-700 font-bold px-3 py-3 rounded-xl text-lg" title="Cuenta">👤</button>
             <button onClick={function(){setShowNuevoEst(true);}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12)"}} className="btn-flash bg-emerald-300 text-white font-black px-4 py-3 rounded-xl text-sm border border-emerald-300">+ Establecimiento</button>
           </div>
         </div>
@@ -2685,6 +2853,47 @@ export default function App(){
       )}
       {showBackup&&<BackupModal establecimientos={establecimientos} setEstablecimientos={setEstablecimientos} onBackupDone={function(){var f=new Date().toISOString();guardarStorage("ganadera_ult_backup",f);setUltBackup(f);}} onClose={function(){setShowBackup(false);}}/>}
       {showHistCambios&&<HistorialCambiosModal onClose={function(){setShowHistCambios(false);}}/>}
+      {showMenuUser&&(
+        <Modal title="👤 Mi cuenta" onClose={function(){setShowMenuUser(false);}}>
+          <div className="flex flex-col gap-3">
+            <div className="bg-gray-50 border border-gray-200 rounded-xl p-3">
+              <p className="text-[10px] text-gray-500 uppercase font-bold">Sesión iniciada como</p>
+              <p className="text-gray-900 font-bold text-sm break-all">{user?user.email:""}</p>
+            </div>
+
+            <button onClick={function(){setShowMenuUser(false);setShowBackup(true);}} className="w-full text-left bg-white border border-gray-200 rounded-xl px-4 py-3 flex items-center gap-3">
+              <span className="text-2xl">💾</span>
+              <div className="flex-1">
+                <p className="text-gray-900 font-bold text-sm">Backup / Restaurar</p>
+                <p className="text-gray-500 text-xs">Exportar o importar tus datos</p>
+              </div>
+              <span className="text-gray-400 text-xl">›</span>
+            </button>
+
+            <button onClick={function(){setShowMenuUser(false);setShowHistCambios(true);}} className="w-full text-left bg-white border border-gray-200 rounded-xl px-4 py-3 flex items-center gap-3">
+              <span className="text-2xl">📜</span>
+              <div className="flex-1">
+                <p className="text-gray-900 font-bold text-sm">Historial de cambios</p>
+                <p className="text-gray-500 text-xs">Ver qué hiciste en la app</p>
+              </div>
+              <span className="text-gray-400 text-xl">›</span>
+            </button>
+
+            <button onClick={function(){
+              if(confirm("¿Cerrar sesión?\n\nTus datos quedan guardados en este celular.")){
+                signOut(auth);
+                setShowMenuUser(false);
+              }
+            }} className="w-full text-left bg-red-50 border border-red-200 rounded-xl px-4 py-3 flex items-center gap-3 mt-2">
+              <span className="text-2xl">🚪</span>
+              <div className="flex-1">
+                <p className="text-red-700 font-bold text-sm">Cerrar sesión</p>
+                <p className="text-red-500 text-xs">Salir de tu cuenta</p>
+              </div>
+            </button>
+          </div>
+        </Modal>
+      )}
       {confirmDialog}
     </div>
   );
