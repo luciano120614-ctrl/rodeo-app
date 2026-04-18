@@ -1,6 +1,7 @@
 import {useState,useEffect,useRef,useCallback} from "react";
-import { auth } from "./firebase";
+import { auth, db } from "./firebase";
 import { onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, sendPasswordResetEmail } from "firebase/auth";
+import { doc, getDoc, setDoc, onSnapshot } from "firebase/firestore";
 
 const flashStyle = `
 @keyframes btnPulse {
@@ -123,6 +124,45 @@ function leerStorage(clave,def){
 }
 function guardarStorage(clave,val){
   try{localStorage.setItem(clave,JSON.stringify(val));}catch(e){}
+}
+
+// ── Sync con Firestore ────────────────────────────────────────────────────────
+// Estrategia: un solo documento por usuario con todos sus datos.
+// Path: users/{uid}/data/main
+// - Al abrir: bajamos desde Firestore (si hay) o subimos desde localStorage (primera vez)
+// - Al cambiar: subimos a Firestore con debounce de 2 segundos
+
+var _syncTimeout=null;
+var _syncUid=null;
+var _syncEnabled=false;
+
+function refDatosUsuario(uid){
+  return doc(db,"usuarios",uid,"datos","principal");
+}
+
+// Sube los datos locales a Firestore (con debounce para no saturar)
+function sincronizarArriba(uid,datos){
+  if(!uid||!_syncEnabled)return;
+  if(_syncTimeout)clearTimeout(_syncTimeout);
+  _syncTimeout=setTimeout(function(){
+    setDoc(refDatosUsuario(uid),{
+      establecimientos:datos.establecimientos||[],
+      actualizado:new Date().toISOString()
+    }).catch(function(err){
+      console.error("Error sincronizando:",err);
+    });
+  },2000); // Espera 2 segundos desde el último cambio
+}
+
+// Activa el sync para un usuario
+function activarSync(uid){
+  _syncUid=uid;
+  _syncEnabled=true;
+}
+function desactivarSync(){
+  _syncEnabled=false;
+  _syncUid=null;
+  if(_syncTimeout){clearTimeout(_syncTimeout);_syncTimeout=null;}
 }
 
 // ── Log de Cambios ────────────────────────────────────────────────────────────
@@ -2601,14 +2641,57 @@ function LoginScreen(){
 export default function AppConAuth(){
   var [user,setUser]=useState(null);
   var [loadingAuth,setLoadingAuth]=useState(true);
+  var [syncStatus,setSyncStatus]=useState("idle"); // idle | cargando | listo | error
+  var [syncError,setSyncError]=useState("");
 
   useEffect(function(){
     var unsub=onAuthStateChanged(auth,function(u){
       setUser(u);
       setLoadingAuth(false);
+      if(!u){
+        desactivarSync();
+        setSyncStatus("idle");
+      }
     });
     return unsub;
   },[]);
+
+  // Cuando el usuario está logueado, cargar datos desde Firestore
+  useEffect(function(){
+    if(!user)return;
+    setSyncStatus("cargando");
+    setSyncError("");
+
+    getDoc(refDatosUsuario(user.uid)).then(function(snap){
+      if(snap.exists()){
+        // Hay datos en la nube: los bajamos a localStorage
+        var data=snap.data();
+        if(data.establecimientos&&Array.isArray(data.establecimientos)){
+          guardarStorage("ganadera_establecimientos_v1",data.establecimientos);
+        }
+      }else{
+        // No hay datos en la nube. Si tenemos datos locales, los subimos
+        var locales=leerStorage("ganadera_establecimientos_v1",null);
+        if(locales&&Array.isArray(locales)&&locales.length>0){
+          return setDoc(refDatosUsuario(user.uid),{
+            establecimientos:locales,
+            actualizado:new Date().toISOString()
+          });
+        }
+      }
+    }).then(function(){
+      activarSync(user.uid);
+      setSyncStatus("listo");
+    }).catch(function(err){
+      console.error("Error cargando datos:",err);
+      setSyncError(err.message||"Error al conectar con la nube");
+      // Igual activamos con datos locales para no bloquear al usuario
+      activarSync(user.uid);
+      setSyncStatus("error");
+    });
+
+    return function(){desactivarSync();};
+  },[user]);
 
   if(loadingAuth){
     return(
@@ -2622,11 +2705,24 @@ export default function AppConAuth(){
   }
 
   if(!user)return <LoginScreen/>;
-  return <AppLogueado user={user}/>;
+
+  if(syncStatus==="cargando"){
+    return(
+      <div className="min-h-screen bg-white flex items-center justify-center">
+        <div className="text-center">
+          <p className="text-5xl mb-3">🐄</p>
+          <p className="text-gray-700 font-bold">Sincronizando tus datos...</p>
+          <p className="text-gray-400 text-xs mt-1">Esto puede tardar unos segundos</p>
+        </div>
+      </div>
+    );
+  }
+
+  return <AppLogueado user={user} syncError={syncError}/>;
 }
 
 // ── App logueada (lo que era antes el App) ────────────────────────────────────
-function AppLogueado({user}){
+function AppLogueado({user,syncError}){
   useEffect(function(){
     var s=document.createElement("style");
     s.innerHTML=flashStyle;
@@ -2699,7 +2795,11 @@ function AppLogueado({user}){
   var [ultBackup,setUltBackup]=useState(function(){return leerStorage("ganadera_ult_backup",null);});
   var [ask,confirmDialog]=useConfirm();
 
-  useEffect(function(){guardarStorage("ganadera_establecimientos_v1",establecimientos);},[establecimientos]);
+  useEffect(function(){
+    guardarStorage("ganadera_establecimientos_v1",establecimientos);
+    // Sincronizar a Firestore con debounce
+    if(user)sincronizarArriba(user.uid,{establecimientos:establecimientos});
+  },[establecimientos,user]);
 
   var estActivo=estActivoId?establecimientos.find(function(e){return e.id===estActivoId;}):null;
 
@@ -2736,6 +2836,17 @@ function AppLogueado({user}){
             <p className="text-6xl mb-4">🐄</p>
             <p className="text-xl font-black text-gray-500 mb-2">Bienvenido a Rodeo</p>
             <p className="text-sm">Creá tu primer establecimiento para empezar</p>
+          </div>
+        )}
+
+        {/* Banner de error de sync */}
+        {syncError&&(
+          <div className="bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 flex items-start gap-2">
+            <span className="text-xl">⚠️</span>
+            <div className="flex-1">
+              <p className="text-amber-800 font-bold text-sm">Sin conexión a la nube</p>
+              <p className="text-amber-700 text-xs">Podés seguir usando la app normal. Los cambios se sincronizarán cuando vuelva la conexión.</p>
+            </div>
           </div>
         )}
 
@@ -2880,7 +2991,10 @@ function AppLogueado({user}){
             </button>
 
             <button onClick={function(){
-              if(confirm("¿Cerrar sesión?\n\nTus datos quedan guardados en este celular.")){
+              if(confirm("¿Cerrar sesión?\n\nTus datos están en la nube, no se pierden. Al volver a entrar con tu email los vas a ver.")){
+                desactivarSync();
+                // Limpiar datos locales para que el próximo usuario no los vea
+                try{localStorage.removeItem("ganadera_establecimientos_v1");}catch(e){}
                 signOut(auth);
                 setShowMenuUser(false);
               }
