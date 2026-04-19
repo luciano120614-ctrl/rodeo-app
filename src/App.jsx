@@ -1716,7 +1716,7 @@ function AgroVistaLote({agro,onUpdate,loteNombre}){
   function tabBtn(t,label){
     return(
       <button key={t} onClick={function(){setTab(t);}
-      } className={"px-3 py-2 rounded-xl text-xs font-black border-2 "+(tab===t?"bg-amber-300 border-amber-300 text-white":"bg-white border-amber-200 text-amber-500")}>
+      } className={"px-3 py-2 rounded-xl text-xs font-black border-2 "+(tab===t?"bg-amber-400 border-amber-400 text-amber-900":"bg-white border-amber-200 text-amber-500")}>
         {label}
       </button>
     );
@@ -1742,11 +1742,11 @@ function AgroVistaLote({agro,onUpdate,loteNombre}){
                   <Inp label="Hectáreas" type="number" placeholder="0" value={formPot.hectareas} onChange={function(e){setPot("hectareas",e.target.value);}}/>
                   <div className="flex gap-2">
                     <button onClick={function(){setMostrarNuevo(false);}} className="flex-1 py-2 rounded-xl border border-gray-200 text-gray-700 text-sm">Cancelar</button>
-                    <button onClick={guardarPotrero} className="flex-1 py-2 rounded-xl bg-amber-300 text-white font-bold text-sm border border-amber-300">Guardar</button>
+                    <button onClick={guardarPotrero} className="flex-1 py-2 rounded-xl bg-amber-400 text-amber-900 font-bold text-sm border border-amber-400">Guardar</button>
                   </div>
                 </div>
               ):(
-                <button onClick={function(){setMostrarNuevo(true);}} style={{boxShadow:"0 1px 2px rgba(0,0,0,0.1)"}} className="w-full bg-amber-300 text-white font-bold py-2.5 rounded-xl text-sm border border-amber-300">＋ Nuevo Potrero</button>
+                <button onClick={function(){setMostrarNuevo(true);}} style={{boxShadow:"0 1px 2px rgba(0,0,0,0.1)"}} className="w-full bg-amber-400 text-amber-900 font-bold py-2.5 rounded-xl text-sm border border-amber-400">＋ Nuevo Potrero</button>
               )}
               {potreros.filter(function(p){return p.nombre.toLowerCase().includes(busqPot.toLowerCase());}).map(function(p){
                 var acts=registros.filter(function(r){return r.potrero===p.nombre;});
@@ -1771,13 +1771,13 @@ function AgroVistaLote({agro,onUpdate,loteNombre}){
           {potreroActivo&&(
             <div className="flex flex-col gap-3">
               <div className="flex items-center gap-2">
-                <button onClick={function(){setPotreroActivo(null);}} className="text-white text-sm font-bold">← Volver</button>
-                <h3 className="text-white font-black text-lg flex-1">{potreroActivo.nombre}</h3>
+                <button onClick={function(){setPotreroActivo(null);}} className="text-gray-700 text-sm font-bold">← Volver</button>
+                <h3 className="text-gray-900 font-black text-lg flex-1">{potreroActivo.nombre}</h3>
                 <button onClick={function(){ask("¿Eliminar potrero?",function(){onUpdate(Object.assign({},agro,{potreros:potreros.filter(function(x){return x.id!==potreroActivo.id;})}));setPotreroActivo(null);});}} className="text-red-500 text-xs border border-red-800 px-2 py-1 rounded-lg">🗑</button>
               </div>
               {potreroActivo.hectareas>0&&<p className="text-amber-600 text-sm">{potreroActivo.hectareas+" ha"}</p>}
               <div style={{background:"#f9fafb"}} className=" border border-amber-200 rounded-xl p-3 flex flex-col gap-2">
-                <p className="text-xs font-black text-white uppercase">+ Actividad</p>
+                <p className="text-xs font-black text-amber-700 uppercase">+ Actividad</p>
                 <Sel label="Actividad" options={ACTIVIDADES_AGRO} value={formAct.actividad} onChange={function(e){setA("actividad",e.target.value);}}/>
                 <Sel label="Cultivo (opcional)" options={CULTIVOS} value={formAct.cultivo} onChange={function(e){setA("cultivo",e.target.value);}}/>
                 <div className="grid grid-cols-2 gap-2">
@@ -1793,17 +1793,17 @@ function AgroVistaLote({agro,onUpdate,loteNombre}){
                   if(!formAct.actividad)return;
                   onUpdate(Object.assign({},agro,{registros:[...registros,{id:Date.now(),fecha:formAct.fecha,actividad:formAct.actividad,cultivo:formAct.cultivo,potrero:potreroActivo.nombre,obs:formAct.obs,kgCosecha:formAct.kgCosecha?parseFloat(formAct.kgCosecha):null}]}));
                   setA("actividad","");setA("cultivo","");setA("obs","");setA("kgCosecha","");
-                }} className="w-full bg-amber-300 text-white font-bold py-2 rounded-xl text-sm border border-amber-300">Guardar</button>
+                }} className="w-full bg-amber-400 text-amber-900 font-bold py-2 rounded-xl text-sm border border-amber-400">Guardar</button>
               </div>
               {registros.filter(function(r){return r.potrero===potreroActivo.nombre;}).length===0&&<p className="text-gray-400 text-sm text-center py-4">Sin actividades</p>}
               {[...registros].filter(function(r){return r.potrero===potreroActivo.nombre;}).sort(function(a,b){return b.fecha.localeCompare(a.fecha);}).map(function(r){
                 return(
                   <div key={r.id} className="bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 flex items-start justify-between">
                     <div className="flex-1">
-                      <p className="text-sm font-black text-white">{r.actividad}</p>
+                      <p className="text-sm font-black text-gray-900">{r.actividad}</p>
                       {r.cultivo&&<span className="text-[10px] bg-amber-100 text-amber-700 border border-amber-300 px-2 py-0.5 rounded-full">{r.cultivo}</span>}
                       <p className="text-green-600 text-xs">{fmtFecha(r.fecha)}</p>
-                      {r.kgCosecha&&<p className="text-white text-sm font-bold">{"🌾 "+r.kgCosecha.toLocaleString("es-AR")+" kg"+(potreroActivo.hectareas>0?" · "+(r.kgCosecha/potreroActivo.hectareas).toFixed(0)+" kg/ha":"")}</p>}
+                      {r.kgCosecha&&<p className="text-amber-700 text-sm font-bold">{"🌾 "+r.kgCosecha.toLocaleString("es-AR")+" kg"+(potreroActivo.hectareas>0?" · "+(r.kgCosecha/potreroActivo.hectareas).toFixed(0)+" kg/ha":"")}</p>}
                       {r.obs&&<p className="text-gray-900 text-sm mt-1">{r.obs}</p>}
                     </div>
                     <button onClick={function(){ask("¿Eliminar?",function(){onUpdate(Object.assign({},agro,{registros:registros.filter(function(x){return x.id!==r.id;})}));});}} className="text-red-500 text-lg ml-2">✕</button>
@@ -1838,14 +1838,14 @@ function AgroVistaLote({agro,onUpdate,loteNombre}){
             if(!formAct.actividad)return;
             onUpdate(Object.assign({},agro,{registros:[...registros,{id:Date.now(),fecha:formAct.fecha,actividad:formAct.actividad,cultivo:formAct.cultivo,potrero:formAct.potrero,obs:formAct.obs}]}));
             setA("actividad","");setA("obs","");setA("potrero","");setA("cultivo","");
-          }} className="w-full bg-amber-300 text-white font-bold py-3 rounded-xl text-sm border border-amber-300">Guardar Actividad</button>
+          }} className="w-full bg-amber-400 text-amber-900 font-bold py-3 rounded-xl text-sm border border-amber-400">Guardar Actividad</button>
           <div className="flex flex-col gap-2 border-t border-gray-100 pt-3">
             {registros.length===0&&<p className="text-gray-400 text-sm text-center py-4">Sin actividades</p>}
             {[...registros].sort(function(a,b){return b.fecha.localeCompare(a.fecha);}).map(function(r){
               return(
                 <div key={r.id} className="bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 flex items-start justify-between">
                   <div className="flex-1">
-                    <p className="text-sm font-black text-white">{r.actividad}</p>
+                    <p className="text-sm font-black text-gray-900">{r.actividad}</p>
                     <div className="flex gap-1 flex-wrap mt-1">
                       {r.cultivo&&<span className="text-[10px] bg-amber-100 text-amber-700 border border-amber-300 px-2 py-0.5 rounded-full">{r.cultivo}</span>}
                       {r.potrero&&<span className="text-[10px] bg-emerald-100 text-gray-700 border border-emerald-200 px-2 py-0.5 rounded-full">{r.potrero}</span>}
@@ -1883,7 +1883,7 @@ function AgroVistaLote({agro,onUpdate,loteNombre}){
             if(!formGasto.concepto||!formGasto.monto)return;
             onUpdate(Object.assign({},agro,{gastos:[...gastos,{id:Date.now(),concepto:formGasto.concepto,monto:parseFloat(formGasto.monto),fecha:formGasto.fecha,potrero:formGasto.potrero}]}));
             setFormGasto({fecha:hoy(),concepto:"",monto:"",potrero:""});
-          }} className="w-full bg-amber-300 text-white font-bold py-3 rounded-xl text-sm border border-amber-300">Guardar Gasto</button>
+          }} className="w-full bg-amber-400 text-amber-900 font-bold py-3 rounded-xl text-sm border border-amber-400">Guardar Gasto</button>
           <div className="flex flex-col gap-2 border-t border-gray-100 pt-3">
             {gastos.length===0&&<p className="text-gray-400 text-sm text-center py-4">Sin gastos</p>}
             {[...gastos].sort(function(a,b){return b.fecha.localeCompare(a.fecha);}).map(function(g){
@@ -2124,7 +2124,7 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
             <button onClick={onBack} className="btn-flash bg-gray-100 text-gray-800 text-2xl font-bold w-11 h-11 rounded-full flex items-center justify-center border border-gray-200">&larr;</button>
             {!esAgro&&(
               <div className="flex gap-2">
-                {esMixto&&<button onClick={function(){setShowAgro(true);}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08)"}} className="btn-flash bg-amber-300 text-white font-bold px-3 py-2 rounded-xl text-sm border border-amber-300">🌾 Agro</button>}
+                {esMixto&&<button onClick={function(){setShowAgro(true);}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08)"}} className="btn-flash bg-amber-400 text-amber-900 font-bold px-3 py-2 rounded-xl text-sm border border-amber-400">🌾 Agro</button>}
 
                 <button onClick={function(){setShowHistorial(true);}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12)"}} className="btn-flash bg-white border border-gray-200 text-gray-700 font-bold px-3 py-2 rounded-xl text-sm">📅{sesiones.length>0?" "+sesiones.length:""}</button>
                 <button onClick={function(){setVista("manga");}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12)"}} className={"btn-flash font-bold px-3 py-2 rounded-xl text-sm border "+(sesionEnCurso?"bg-amber-500 border-amber-500 text-white":"bg-sky-400 border-sky-400 text-white")}>
