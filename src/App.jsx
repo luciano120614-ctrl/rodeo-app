@@ -2720,51 +2720,35 @@ export default function AppConAuth(){
   // Cuando el usuario está logueado, cargar datos desde Firestore
   useEffect(function(){
     if(!user)return;
-    // NO mostramos "cargando" - con datos locales ya mostramos la app
     setSyncError("");
-    // Activar sync inmediato: la app funciona ya con datos locales
     activarSync(user.uid);
     setSyncStatus("listo");
 
     var unsubSnapshot=null;
     var ref=refDatosUsuario(user.uid);
 
-    // Estrategia offline-first:
-    // 1. Leer desde CACHÉ primero (instantáneo, no se cuelga sin internet)
-    // 2. Suscribirse a onSnapshot para updates en vivo
-    // 3. Si no había cache y hay internet, getDoc trae los datos del servidor
+    // Estrategia offline-first robusta:
+    // - Si estamos ONLINE: usar getDoc (trae del servidor, funciona bien)
+    // - Si estamos OFFLINE: usar getDocFromCache (instantáneo, no se cuelga)
+    // - Suscribirse a onSnapshot para updates en vivo
 
-    getDocFromCache(ref).then(function(snap){
-      if(snap.exists()){
-        var data=snap.data();
-        if(data.establecimientos&&Array.isArray(data.establecimientos)){
-          var locales=leerStorage("ganadera_establecimientos_v1",null);
-          // Solo actualizar si realmente cambió para no reescribir
-          if(!locales||JSON.stringify(locales)!==JSON.stringify(data.establecimientos)){
-            guardarStorage("ganadera_establecimientos_v1",data.establecimientos);
-          }
+    function aplicarDatos(data){
+      if(data&&data.establecimientos&&Array.isArray(data.establecimientos)){
+        var locales=leerStorage("ganadera_establecimientos_v1",null);
+        if(!locales||JSON.stringify(locales)!==JSON.stringify(data.establecimientos)){
+          guardarStorage("ganadera_establecimientos_v1",data.establecimientos);
+          window.location.reload();
         }
       }
-    }).catch(function(){
-      // No hay nada en caché - es la primera vez. Si hay internet, getDoc lo traerá.
-    });
+    }
 
-    // Suscribirse a cambios en tiempo real (solo funciona cuando hay internet)
-    // Esto también hace el "primer fetch" del servidor cuando hay conexión
-    try{
-      unsubSnapshot=onSnapshot(ref,function(snap){
+    if(typeof navigator!=="undefined"&&navigator.onLine){
+      // Online: traer del servidor
+      getDoc(ref).then(function(snap){
         if(snap.exists()){
-          var data=snap.data();
-          if(data.establecimientos&&Array.isArray(data.establecimientos)){
-            var locales=leerStorage("ganadera_establecimientos_v1",null);
-            if(!locales||JSON.stringify(locales)!==JSON.stringify(data.establecimientos)){
-              guardarStorage("ganadera_establecimientos_v1",data.establecimientos);
-              // Forzar recarga para que React muestre los datos nuevos del servidor
-              window.location.reload();
-            }
-          }
+          aplicarDatos(snap.data());
         }else{
-          // No hay datos en la nube. Si tenemos locales, subirlos
+          // No hay datos en servidor, si tengo locales subirlos
           var locales=leerStorage("ganadera_establecimientos_v1",null);
           if(locales&&Array.isArray(locales)&&locales.length>0){
             setDoc(ref,{
@@ -2772,6 +2756,26 @@ export default function AppConAuth(){
               actualizado:new Date().toISOString()
             }).catch(function(){});
           }
+        }
+      }).catch(function(err){
+        console.log("getDoc error (intentando cache):",err.message);
+        // Si falla online, intentar cache
+        getDocFromCache(ref).then(function(snap){
+          if(snap.exists())aplicarDatos(snap.data());
+        }).catch(function(){});
+      });
+    }else{
+      // Offline: solo cache (instantáneo)
+      getDocFromCache(ref).then(function(snap){
+        if(snap.exists())aplicarDatos(snap.data());
+      }).catch(function(){});
+    }
+
+    // Suscribirse para updates en tiempo real
+    try{
+      unsubSnapshot=onSnapshot(ref,function(snap){
+        if(snap.exists()){
+          aplicarDatos(snap.data());
         }
       },function(err){
         console.log("onSnapshot error:",err.message);
