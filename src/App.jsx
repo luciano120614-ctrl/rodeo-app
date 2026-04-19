@@ -1,7 +1,7 @@
 import {useState,useEffect,useRef,useCallback} from "react";
 import { auth, db } from "./firebase";
 import { onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, sendPasswordResetEmail } from "firebase/auth";
-import { doc, getDoc, setDoc, onSnapshot } from "firebase/firestore";
+import { doc, getDoc, getDocFromCache, setDoc, onSnapshot } from "firebase/firestore";
 
 const flashStyle = `
 @keyframes btnPulse {
@@ -2639,19 +2639,14 @@ function LoginScreen(){
 
 // ── App con autenticación ─────────────────────────────────────────────────────
 export default function AppConAuth(){
-  // Intento recuperar info del usuario guardada previamente (para no esperar a Firebase si estamos offline)
-  var userCache=leerStorage("rodeo_user_cache",null);
-  var [user,setUser]=useState(userCache);
-  var [loadingAuth,setLoadingAuth]=useState(!userCache); // Si tengo cache, no muestro loading
-  // Si ya hay user cache, empezamos como "listo" y sincronizamos en background
-  var [syncStatus,setSyncStatus]=useState(userCache?"listo":"idle");
+  // auth.currentUser está disponible INMEDIATAMENTE si Firebase ya tiene
+  // datos del usuario en IndexedDB (que es el caso cuando ya iniciaste sesión antes).
+  // Esto evita la espera bloqueante de onAuthStateChanged cuando no hay internet.
+  var [user,setUser]=useState(function(){return auth.currentUser;});
+  var [loadingAuth,setLoadingAuth]=useState(function(){return !auth.currentUser;});
+  var [syncStatus,setSyncStatus]=useState("idle"); // idle | cargando | listo | error
   var [syncError,setSyncError]=useState("");
-  var [syncDoneForUid,setSyncDoneForUid]=useState(userCache?userCache.uid:null);
-
-  // Si tengo cache, activo el sync inmediatamente (para que los cambios se guarden)
-  useEffect(function(){
-    if(userCache)activarSync(userCache.uid);
-  },[]);
+  var [syncDoneForUid,setSyncDoneForUid]=useState(null);
 
   // PWA: registrar service worker y manifest (se ejecuta al abrir la app, antes del login)
   useEffect(function(){
@@ -2701,105 +2696,91 @@ export default function AppConAuth(){
   },[]);
 
   useEffect(function(){
-    var cache=leerStorage("rodeo_user_cache",null);
-
-    // Si tengo cache, NO espero a Firebase. Uso el cache directamente y engancho Firebase en background.
-    // Esto evita el bug donde onAuthStateChanged no dispara sin internet.
-    if(cache){
-      // Engancho Firebase pero sin bloquear - lo hago async con un pequeño delay
-      setTimeout(function(){
-        try{
-          onAuthStateChanged(auth,function(u){
-            if(u){
-              try{guardarStorage("rodeo_user_cache",{uid:u.uid,email:u.email});}catch(e){}
-              setUser(function(prev){
-                if(prev&&prev.uid===u.uid)return prev;
-                return u;
-              });
-            }else{
-              // Firebase dice null. Solo actuamos si estamos realmente online.
-              if(navigator.onLine){
-                setUser(null);
-                desactivarSync();
-                setSyncStatus("idle");
-                try{localStorage.removeItem("rodeo_user_cache");}catch(e){}
-              }
-            }
-          });
-        }catch(e){console.error("Error enganchando auth",e);}
-      },100);
-      return;
-    }
-
-    // Sin cache: flujo normal (primera vez o después de cerrar sesión)
     var unsub=onAuthStateChanged(auth,function(u){
       if(u){
-        try{guardarStorage("rodeo_user_cache",{uid:u.uid,email:u.email});}catch(e){}
-        setUser(function(prev){
-          if(prev&&prev.uid===u.uid)return prev;
-          return u;
-        });
+        setUser(u);
         setLoadingAuth(false);
       }else{
+        // Si Firebase dice "no hay user" pero estamos offline, ignorar (puede ser transitorio)
+        // Solo cerrar sesión si realmente hay conexión y Firebase confirmó el logout
+        if(typeof navigator!=="undefined"&&navigator.onLine===false){
+          // Offline: mantenemos la sesión como estaba
+          setLoadingAuth(false);
+          return;
+        }
         setUser(null);
         setLoadingAuth(false);
         desactivarSync();
         setSyncStatus("idle");
-        try{localStorage.removeItem("rodeo_user_cache");}catch(e){}
       }
     });
     return unsub;
   },[]);
 
-  // Cuando el usuario está logueado, cargar datos desde Firestore (solo una vez por UID)
+  // Cuando el usuario está logueado, cargar datos desde Firestore
   useEffect(function(){
     if(!user)return;
-    // Si ya sincronizamos este uid en esta sesión, no repetir
-    if(syncDoneForUid===user.uid&&syncStatus==="listo")return;
-
-    // SIEMPRE activamos sync inmediatamente con datos locales.
-    // El getDoc se hace en background sin bloquear la UI.
+    // NO mostramos "cargando" - con datos locales ya mostramos la app
+    setSyncError("");
+    // Activar sync inmediato: la app funciona ya con datos locales
     activarSync(user.uid);
     setSyncStatus("listo");
-    setSyncDoneForUid(user.uid);
 
-    // Intentamos traer datos de la nube en background, solo si estamos online
-    if(navigator.onLine){
-      function conTimeout(promesa,ms){
-        return new Promise(function(resolve,reject){
-          var timer=setTimeout(function(){reject(new Error("timeout"));},ms);
-          promesa.then(function(v){clearTimeout(timer);resolve(v);},
-                       function(e){clearTimeout(timer);reject(e);});
-        });
+    var unsubSnapshot=null;
+    var ref=refDatosUsuario(user.uid);
+
+    // Estrategia offline-first:
+    // 1. Leer desde CACHÉ primero (instantáneo, no se cuelga sin internet)
+    // 2. Suscribirse a onSnapshot para updates en vivo
+    // 3. Si no había cache y hay internet, getDoc trae los datos del servidor
+
+    getDocFromCache(ref).then(function(snap){
+      if(snap.exists()){
+        var data=snap.data();
+        if(data.establecimientos&&Array.isArray(data.establecimientos)){
+          var locales=leerStorage("ganadera_establecimientos_v1",null);
+          // Solo actualizar si realmente cambió para no reescribir
+          if(!locales||JSON.stringify(locales)!==JSON.stringify(data.establecimientos)){
+            guardarStorage("ganadera_establecimientos_v1",data.establecimientos);
+          }
+        }
       }
+    }).catch(function(){
+      // No hay nada en caché - es la primera vez. Si hay internet, getDoc lo traerá.
+    });
 
-      conTimeout(getDoc(refDatosUsuario(user.uid)),8000).then(function(snap){
+    // Suscribirse a cambios en tiempo real (solo funciona cuando hay internet)
+    // Esto también hace el "primer fetch" del servidor cuando hay conexión
+    try{
+      unsubSnapshot=onSnapshot(ref,function(snap){
         if(snap.exists()){
           var data=snap.data();
           if(data.establecimientos&&Array.isArray(data.establecimientos)){
-            // Solo sobreescribir locales si los de la nube son más recientes o diferentes
             var locales=leerStorage("ganadera_establecimientos_v1",null);
             if(!locales||JSON.stringify(locales)!==JSON.stringify(data.establecimientos)){
               guardarStorage("ganadera_establecimientos_v1",data.establecimientos);
-              // Forzar actualización de la UI recargando
+              // Forzar recarga para que React muestre los datos nuevos del servidor
               window.location.reload();
             }
           }
         }else{
+          // No hay datos en la nube. Si tenemos locales, subirlos
           var locales=leerStorage("ganadera_establecimientos_v1",null);
           if(locales&&Array.isArray(locales)&&locales.length>0){
-            return setDoc(refDatosUsuario(user.uid),{
+            setDoc(ref,{
               establecimientos:locales,
               actualizado:new Date().toISOString()
-            });
+            }).catch(function(){});
           }
         }
-      }).catch(function(err){
-        console.log("Sync background falló (normal si no hay internet):",err.message);
+      },function(err){
+        console.log("onSnapshot error:",err.message);
       });
-    }
+    }catch(e){console.log("No se pudo suscribir:",e);}
 
-    return function(){};
+    return function(){
+      if(unsubSnapshot)unsubSnapshot();
+    };
   },[user]);
 
   // Desactivar sync al desmontar
