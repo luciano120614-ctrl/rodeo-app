@@ -2027,7 +2027,14 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
   function actualizar(a){
     setLotes(function(prev){
       return prev.map(function(l){
-        if(l.id===loteId)return Object.assign({},l,{animales:l.animales.map(function(x){return x.id===a.id?a:x;})});
+        // Lote original: si el animal se está moviendo, sacarlo. Si no, actualizarlo.
+        if(l.id===loteId){
+          if(a._moverA){
+            return Object.assign({},l,{animales:l.animales.filter(function(x){return x.id!==a.id;})});
+          }
+          return Object.assign({},l,{animales:l.animales.map(function(x){return x.id===a.id?a:x;})});
+        }
+        // Lote destino: agregar el animal (sin _moverA)
         if(a._moverA&&l.id===parseInt(a._moverA)){var clean=Object.assign({},a);delete clean._moverA;return Object.assign({},l,{animales:[...l.animales,clean]});}
         return l;
       });
