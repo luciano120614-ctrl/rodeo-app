@@ -400,7 +400,7 @@ function MarcaForm({onAdd}){
 }
 
 // ── Detalle Animal Modal ──────────────────────────────────────────────────────
-function DetalleModal({animal,onClose,onUpdate,onDelete,lotes,loteActualId,establecimientos,estId,onMoverEst}){
+function DetalleModal({animal,onClose,onUpdate,onDelete,lotes,loteActualId,establecimientos,estId,onMoverEst,onVender,nombreLote}){
   var [tab,setTab]=useState("info");
   var [obs,setObs]=useState(animal.obs||"");
   var [peso,setPeso]=useState("");
@@ -410,6 +410,7 @@ function DetalleModal({animal,onClose,onUpdate,onDelete,lotes,loteActualId,estab
   var [showMoverEst,setShowMoverEst]=useState(false);
   var [estDestino,setEstDestino]=useState("");
   var [loteEnEst,setLoteEnEst]=useState("");
+  var [showVender,setShowVender]=useState(false);
   var [formSan,setFormSan]=useState({tipo:"Vacuna",nombre:"",fecha:hoy(),proxima:"",obs:""});
   var [ask,confirmDialog]=useConfirm();
   var pesoRef=useRef();
@@ -553,10 +554,13 @@ function DetalleModal({animal,onClose,onUpdate,onDelete,lotes,loteActualId,estab
                 </div>
               </div>
             )}
+            <button onClick={function(){setShowVender(true);}} className="self-start text-xs text-emerald-700 border border-emerald-400 bg-emerald-50 px-3 py-1.5 rounded-lg font-bold">💰 Vender animal</button>
             <button onClick={function(){ask("¿Eliminar este animal?",function(){onDelete(animal.id);onClose();});}} className="self-start text-xs text-red-400 border border-red-700 px-3 py-1.5 rounded-lg">🗑 Eliminar</button>
           </div>
         </div>
       )}
+
+      {showVender&&<VenderAnimalModal animal={animal} loteNombre={nombreLote||""} onClose={function(){setShowVender(false);}} onVender={function(datosVenta){onVender&&onVender(animal,datosVenta);setShowVender(false);onClose();}}/>}
 
       {tab==="pesajes"&&(
         <div className="flex flex-col gap-2">
@@ -1553,6 +1557,234 @@ function ReproModal({lote,onClose,onUpdate,toros}){
 }
 
 // ── Toros Modal ───────────────────────────────────────────────────────────────
+// ── Vender Animal Modal ────────────────────────────────────────────────────────
+function VenderAnimalModal({animal,loteNombre,onClose,onVender}){
+  var ultPeso=animal.pesajes&&animal.pesajes.length>0?[...animal.pesajes].sort(function(a,b){return b.fecha.localeCompare(a.fecha);})[0]:null;
+  var [form,setForm]=useState({
+    fecha:hoy(),
+    peso:ultPeso?String(ultPeso.peso):"",
+    precioKg:"",
+    precioTotal:"",
+    comprador:"",
+    obs:""
+  });
+  function setF(k,v){setForm(function(p){return Object.assign({},p,{[k]:v});});}
+  // Auto calcular precio total si pone precio/kg + peso, o viceversa
+  function onChangePrecioKg(v){
+    setF("precioKg",v);
+    if(v&&form.peso){
+      var total=(parseFloat(v)*parseFloat(form.peso)).toFixed(2);
+      setF("precioTotal",total);
+    }
+  }
+  function onChangePeso(v){
+    setF("peso",v);
+    if(v&&form.precioKg){
+      var total=(parseFloat(v)*parseFloat(form.precioKg)).toFixed(2);
+      setF("precioTotal",total);
+    }
+  }
+  function confirmar(){
+    if(!form.fecha){alert("Poné la fecha");return;}
+    onVender({
+      fecha:form.fecha,
+      peso:form.peso?parseFloat(form.peso):null,
+      precioKg:form.precioKg?parseFloat(form.precioKg):null,
+      precioTotal:form.precioTotal?parseFloat(form.precioTotal):null,
+      comprador:form.comprador.trim(),
+      obs:form.obs.trim(),
+      loteOrigen:loteNombre
+    });
+  }
+  return(
+    <Modal title={"💰 Vender "+animal.caravana} onClose={onClose}>
+      <div className="flex flex-col gap-3">
+        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3">
+          <p className="text-xs text-emerald-700">Este animal va a salir del lote <b>{loteNombre}</b> y quedar en el registro de vendidos. Vas a poder ver toda su info ahí.</p>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <Inp label="Fecha venta" type="date" value={form.fecha} onChange={function(e){setF("fecha",e.target.value);}}/>
+          <Inp label="Peso (kg)" type="number" placeholder="0" value={form.peso} onChange={function(e){onChangePeso(e.target.value);}}/>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <Inp label="$/kg" type="number" placeholder="0" value={form.precioKg} onChange={function(e){onChangePrecioKg(e.target.value);}}/>
+          <Inp label="Total ($)" type="number" placeholder="0" value={form.precioTotal} onChange={function(e){setF("precioTotal",e.target.value);}}/>
+        </div>
+        <Inp label="Comprador" placeholder="Opcional" value={form.comprador} onChange={function(e){setF("comprador",e.target.value);}}/>
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] text-green-600 font-bold uppercase">Observaciones</label>
+          <textarea rows={2} value={form.obs} onChange={function(e){setF("obs",e.target.value);}} placeholder="Notas..."
+            className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-gray-800 text-sm focus:outline-none focus:border-green-400 resize-none"/>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl border border-gray-200 text-gray-700 text-sm font-bold">Cancelar</button>
+          <button onClick={confirmar} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08)"}} className="flex-1 bg-emerald-600 text-white font-black py-2.5 rounded-xl text-sm border border-emerald-500">✓ Confirmar venta</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ── Vendidos Modal ─────────────────────────────────────────────────────────────
+function VendidosModal({est,onClose,onEliminar}){
+  var [ask,confirmDialog]=useConfirm();
+  var [busq,setBusq]=useState("");
+  var [detalle,setDetalle]=useState(null);
+  var vendidos=est.vendidos||[];
+  var vendidosOrdenados=[...vendidos].sort(function(a,b){return (b.venta.fecha||"").localeCompare(a.venta.fecha||"");});
+  var filtrados=vendidosOrdenados.filter(function(v){
+    var q=busq.trim().toUpperCase();
+    if(!q)return true;
+    return v.caravana.toUpperCase().indexOf(q)>=0||(v.venta.comprador||"").toUpperCase().indexOf(q)>=0;
+  });
+  var totalGanado=vendidos.reduce(function(s,v){return s+(v.venta.precioTotal||0);},0);
+  var totalAnimales=vendidos.length;
+
+  if(detalle){
+    var a=detalle;
+    var pesajes=a.pesajes||[];
+    var pesajesOrd=[...pesajes].sort(function(x,y){return x.fecha.localeCompare(y.fecha);});
+    var primerPeso=pesajesOrd.length>0?pesajesOrd[0]:null;
+    var ultimoPeso=pesajesOrd.length>0?pesajesOrd[pesajesOrd.length-1]:null;
+    var kgGanTotal=primerPeso&&ultimoPeso?(ultimoPeso.peso-primerPeso.peso):null;
+
+    // Agrupar pesajes por lote (usando historial si existe)
+    var historial=a.historialLotes||[];
+    function loteEnFecha(fecha){
+      if(historial.length===0)return a.venta.loteOrigen||"—";
+      var vigente=historial[0].lote;
+      for(var i=0;i<historial.length;i++){
+        if(historial[i].fecha<=fecha)vigente=historial[i].lote;
+        else break;
+      }
+      return vigente;
+    }
+    var porLote={};
+    pesajesOrd.forEach(function(p){
+      var lote=loteEnFecha(p.fecha);
+      if(!porLote[lote])porLote[lote]={pesajes:[]};
+      porLote[lote].pesajes.push(p);
+    });
+    var lotesOrd=Object.keys(porLote);
+
+    return(
+      <Modal title={"💰 "+a.caravana} onClose={function(){setDetalle(null);}}>
+        <div className="flex flex-col gap-3">
+          <button onClick={function(){setDetalle(null);}} className="text-gray-700 text-sm font-bold text-left">← Volver</button>
+
+          <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 flex flex-col gap-1">
+            <p className="text-xs text-emerald-600 uppercase font-bold">Datos del animal</p>
+            <p className="text-gray-900 text-sm"><b>Caravana:</b> {a.caravana}</p>
+            {a.sexo&&<p className="text-gray-900 text-sm"><b>Sexo:</b> {a.sexo}</p>}
+            {a.categoria&&<p className="text-gray-900 text-sm"><b>Categoría:</b> {a.categoria}</p>}
+            {a.raza&&<p className="text-gray-900 text-sm"><b>Raza:</b> {a.raza}</p>}
+            {a.fechaNac&&<p className="text-gray-900 text-sm"><b>Nac:</b> {fmtFecha(a.fechaNac)}</p>}
+          </div>
+
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex flex-col gap-1">
+            <p className="text-xs text-amber-700 uppercase font-bold">Datos de la venta</p>
+            <p className="text-gray-900 text-sm"><b>Fecha:</b> {fmtFecha(a.venta.fecha)}</p>
+            {a.venta.peso&&<p className="text-gray-900 text-sm"><b>Peso final:</b> {a.venta.peso+" kg"}</p>}
+            {a.venta.precioKg&&<p className="text-gray-900 text-sm"><b>$/kg:</b> {"$"+a.venta.precioKg.toLocaleString("es-AR")}</p>}
+            {a.venta.precioTotal&&<p className="text-amber-800 font-black text-lg">{"Total: $"+a.venta.precioTotal.toLocaleString("es-AR")}</p>}
+            {a.venta.comprador&&<p className="text-gray-900 text-sm"><b>Comprador:</b> {a.venta.comprador}</p>}
+            {a.venta.obs&&<p className="text-gray-900 text-sm mt-1">{a.venta.obs}</p>}
+          </div>
+
+          {kgGanTotal!==null&&(
+            <div className="bg-sky-50 border border-sky-200 rounded-xl p-3">
+              <p className="text-xs text-sky-700 uppercase font-bold">Ganancia total</p>
+              <p className={"font-black text-lg "+(kgGanTotal>=0?"text-emerald-700":"text-red-600")}>{(kgGanTotal>=0?"+":"")+kgGanTotal.toFixed(1)+" kg"}</p>
+              {primerPeso&&ultimoPeso&&<p className="text-xs text-sky-600">{"De "+primerPeso.peso+"kg ("+fmtFecha(primerPeso.fecha)+") a "+ultimoPeso.peso+"kg ("+fmtFecha(ultimoPeso.fecha)+")"}</p>}
+            </div>
+          )}
+
+          {lotesOrd.length>0&&(
+            <div className="flex flex-col gap-2">
+              <p className="text-xs text-gray-600 uppercase font-bold">Detalle por lote</p>
+              {lotesOrd.map(function(lot){
+                var ps=porLote[lot].pesajes;
+                var ini=ps[0];
+                var fin=ps[ps.length-1];
+                var gan=ps.length>1?(fin.peso-ini.peso):null;
+                return(
+                  <div key={lot} className="bg-gray-50 border border-gray-200 rounded-xl p-3">
+                    <p className="text-gray-900 font-bold text-sm">{lot}</p>
+                    <p className="text-xs text-gray-500">{ps.length+" pesaje"+(ps.length>1?"s":"")+" · "+fmtFecha(ini.fecha)+(ps.length>1?" a "+fmtFecha(fin.fecha):"")}</p>
+                    {gan!==null&&<p className={"text-sm font-bold "+(gan>=0?"text-emerald-600":"text-red-500")}>{(gan>=0?"+":"")+gan.toFixed(1)+" kg"}</p>}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {pesajesOrd.length>0&&(
+            <div className="flex flex-col gap-2">
+              <p className="text-xs text-gray-600 uppercase font-bold">Todos los pesajes</p>
+              {pesajesOrd.map(function(p,i){
+                var prev=i>0?pesajesOrd[i-1]:null;
+                var dif=prev?(p.peso-prev.peso).toFixed(1):null;
+                return(
+                  <div key={p.id||i} className="bg-gray-50 border border-gray-100 rounded-xl px-3 py-2 flex items-center justify-between">
+                    <div>
+                      <p className="text-gray-900 text-sm font-bold">{p.peso+" kg"}</p>
+                      <p className="text-xs text-gray-500">{fmtFecha(p.fecha)}</p>
+                    </div>
+                    {dif!==null&&<span className={"text-xs font-bold "+(parseFloat(dif)>=0?"text-emerald-600":"text-red-500")}>{(parseFloat(dif)>=0?"+":"")+dif+" kg"}</span>}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          <button onClick={function(){ask("¿Eliminar registro de venta? Esta acción no se puede deshacer.",function(){onEliminar(a.id);setDetalle(null);});}} className="w-full py-2.5 rounded-xl border border-red-300 text-red-600 text-sm font-bold">🗑 Eliminar registro</button>
+          {confirmDialog}
+        </div>
+      </Modal>
+    );
+  }
+
+  return(
+    <Modal title={"💰 Vendidos"+(totalAnimales>0?" ("+totalAnimales+")":"")} onClose={onClose}>
+      <div className="flex flex-col gap-3">
+        {totalAnimales>0&&(
+          <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-center">
+            <p className="text-xs text-emerald-700 uppercase font-bold">Total facturado</p>
+            <p className="text-2xl font-black text-emerald-800">{"$"+totalGanado.toLocaleString("es-AR")}</p>
+            <p className="text-xs text-emerald-600">{totalAnimales+" animal"+(totalAnimales>1?"es":"")+" vendido"+(totalAnimales>1?"s":"")}</p>
+          </div>
+        )}
+
+        {totalAnimales>0&&(
+          <input value={busq} onChange={function(e){setBusq(e.target.value);}} placeholder="🔍 Buscar caravana o comprador..."
+            style={{background:"#f9fafb"}} className="border border-gray-200 rounded-xl px-3 py-2.5 text-gray-900 text-sm focus:outline-none w-full"/>
+        )}
+
+        {totalAnimales===0&&<div className="text-center py-12 text-gray-400"><p className="text-5xl mb-3">💰</p><p className="text-sm">Sin ventas registradas</p><p className="text-xs mt-2 text-gray-500">Marcá animales como vendidos desde su ficha</p></div>}
+
+        {filtrados.map(function(v){
+          return(
+            <button key={v.id} onClick={function(){setDetalle(v);}} className="w-full text-left bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 flex items-center justify-between">
+              <div className="flex-1">
+                <p className="text-gray-900 font-black text-sm">{v.caravana}</p>
+                <div className="flex gap-2 mt-0.5">
+                  {v.sexo&&<span className={"text-[10px] px-1.5 py-0.5 rounded-full font-bold "+(v.sexo==="Macho"?"bg-blue-50 text-blue-700":"bg-pink-50 text-pink-700")}>{v.sexo}</span>}
+                  {v.categoria&&<span className="text-[10px] text-gray-600">{v.categoria}</span>}
+                </div>
+                <p className="text-xs text-gray-500 mt-1">{fmtFecha(v.venta.fecha)+(v.venta.comprador?" · "+v.venta.comprador:"")}</p>
+              </div>
+              <div className="text-right">
+                {v.venta.precioTotal?<p className="text-emerald-700 font-black text-sm">{"$"+v.venta.precioTotal.toLocaleString("es-AR")}</p>:<p className="text-gray-400 text-xs">Sin precio</p>}
+                {v.venta.peso&&<p className="text-xs text-gray-500">{v.venta.peso+" kg"}</p>}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </Modal>
+  );
+}
+
 function TorosModal({est,onClose,onUpdate}){
   var [ask,confirmDialog]=useConfirm();
   var [form,setForm]=useState({caravana:"",raza:"",obs:""});
@@ -2022,7 +2254,9 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
 
   function agregar(a){
     logCambio("animal_creado","Nuevo animal "+a.caravana,"Lote: "+lote.nombre);
-    setLotes(function(prev){return prev.map(function(l){return l.id===loteId?Object.assign({},l,{animales:[...l.animales,a]}):l;});});
+    // Iniciar historial de lotes con el lote actual
+    var animalConHistorial=Object.assign({},a,{historialLotes:[{fecha:hoy(),lote:lote.nombre}]});
+    setLotes(function(prev){return prev.map(function(l){return l.id===loteId?Object.assign({},l,{animales:[...l.animales,animalConHistorial]}):l;});});
   }
   function actualizar(a){
     setLotes(function(prev){
@@ -2034,8 +2268,18 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
           }
           return Object.assign({},l,{animales:l.animales.map(function(x){return x.id===a.id?a:x;})});
         }
-        // Lote destino: agregar el animal (sin _moverA)
-        if(a._moverA&&l.id===parseInt(a._moverA)){var clean=Object.assign({},a);delete clean._moverA;return Object.assign({},l,{animales:[...l.animales,clean]});}
+        // Lote destino: agregar el animal (sin _moverA) + agregar al historial
+        if(a._moverA&&l.id===parseInt(a._moverA)){
+          var clean=Object.assign({},a);
+          delete clean._moverA;
+          var hist=clean.historialLotes||[];
+          // Evitar duplicar si ya era el último
+          if(hist.length===0||hist[hist.length-1].lote!==l.nombre){
+            hist=[...hist,{fecha:hoy(),lote:l.nombre}];
+          }
+          clean.historialLotes=hist;
+          return Object.assign({},l,{animales:[...l.animales,clean]});
+        }
         return l;
       });
     });
@@ -2078,13 +2322,45 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
   function moverEst(destEstId,destLoteId){
     if(setEstablecimientos){
       setEstablecimientos(function(prev){
+        // Obtener nombre del lote destino para agregar al historial
+        var destEst=prev.find(function(e){return e.id===destEstId;});
+        var destLote=destEst?destEst.lotes.find(function(l){return l.id===destLoteId;}):null;
+        var nombreDestino=destLote?destLote.nombre:"";
+        var animalConHist=Object.assign({},detalleAnimal);
+        if(nombreDestino){
+          var hist=animalConHist.historialLotes||[];
+          if(hist.length===0||hist[hist.length-1].lote!==nombreDestino){
+            hist=[...hist,{fecha:hoy(),lote:nombreDestino}];
+          }
+          animalConHist.historialLotes=hist;
+        }
         return prev.map(function(e){
           if(e.id===estId)return Object.assign({},e,{lotes:e.lotes.map(function(l){return l.id===loteId?Object.assign({},l,{animales:l.animales.filter(function(a){return a.id!==detalleId;})}):l;})});
-          if(e.id===destEstId)return Object.assign({},e,{lotes:e.lotes.map(function(l){return l.id===destLoteId?Object.assign({},l,{animales:[...l.animales,detalleAnimal]}):l;})});
+          if(e.id===destEstId)return Object.assign({},e,{lotes:e.lotes.map(function(l){return l.id===destLoteId?Object.assign({},l,{animales:[...l.animales,animalConHist]}):l;})});
           return e;
         });
       });
     }
+    setDetalleId(null);
+  }
+
+  function venderAnimal(animal,datosVenta){
+    if(!setEstablecimientos)return;
+    // Armo el registro de venta: ficha completa del animal + info de la venta
+    var registroVenta=Object.assign({},animal,{venta:datosVenta});
+    setEstablecimientos(function(prev){
+      return prev.map(function(e){
+        if(e.id!==estId)return e;
+        // Saco el animal del lote actual
+        var nuevosLotes=e.lotes.map(function(l){
+          if(l.id!==loteId)return l;
+          return Object.assign({},l,{animales:l.animales.filter(function(a){return a.id!==animal.id;})});
+        });
+        // Lo agrego a la lista de vendidos
+        var nuevosVendidos=[...(e.vendidos||[]),registroVenta];
+        return Object.assign({},e,{lotes:nuevosLotes,vendidos:nuevosVendidos});
+      });
+    });
     setDetalleId(null);
   }
 
@@ -2370,7 +2646,7 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
           setSesionPendienteReabrir(null);
           setResumenSesion(ses);
         }
-      }} onUpdate={actualizar} onDelete={eliminar} lotes={allLotes} loteActualId={loteId} establecimientos={establecimientos} estId={estId} onMoverEst={moverEst}/>}
+      }} onUpdate={actualizar} onDelete={eliminar} lotes={allLotes} loteActualId={loteId} establecimientos={establecimientos} estId={estId} onMoverEst={moverEst} onVender={venderAnimal} nombreLote={lote.nombre}/>}
       {resumenSesion&&<ResumenSesionModal sesion={resumenSesion} nombreLote={lote.nombre} animales={animales} onVerAnimal={function(id){setSesionPendienteReabrir(resumenSesion);setResumenSesion(null);setDetalleId(id);}} onClose={function(){setResumenSesion(null);}}/>}
       {showHistorial&&<HistorialModal sesiones={sesiones} onClose={function(){setShowHistorial(false);}} onVerSesion={function(s){setShowHistorial(false);setResumenSesion(s);}} onEliminarSesion={function(id){setLotes(function(prev){return prev.map(function(l){return l.id===loteId?Object.assign({},l,{sesiones:l.sesiones.filter(function(s){return s.id!==id;})}):l;});});}}/>}
       {showRepro&&<ReproModal lote={lote} toros={establecimientos?(establecimientos.find(function(e){return e.id===estId;})||{}).toros||[]:lote.toros||[]} onClose={function(){setShowRepro(false);}} onUpdate={function(sesion,nuevosAnimales,deleteId){
@@ -2400,6 +2676,7 @@ function VistaEstablecimiento({estId,establecimientos,setEstablecimientos,onBack
   var [showNuevoLote,setShowNuevoLote]=useState(false);
   var [showAlertas,setShowAlertas]=useState(false);
   var [showToros,setShowToros]=useState(false);
+  var [showVendidos,setShowVendidos]=useState(false);
   var [showCuaderno,setShowCuaderno]=useState(false);
   var [showRenombrar,setShowRenombrar]=useState(false);
   var [ask,confirmDialog]=useConfirm();
@@ -2450,6 +2727,7 @@ function VistaEstablecimiento({estId,establecimientos,setEstablecimientos,onBack
               <button onClick={function(){setShowAlertas(true);}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08)"}} className={"btn-flash border font-bold px-4 py-3 rounded-xl text-2xl "+(alertasActivas.length>0?"bg-amber-500 border-amber-500 text-white":"bg-white border-gray-200 text-gray-700")}>
                 {"🔔"+(alertasActivas.length>0?" "+alertasActivas.length:"")}
               </button>
+              <button onClick={function(){setShowVendidos(true);}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08)"}} className="btn-flash bg-white border border-gray-200 text-gray-700 font-bold px-4 py-3 rounded-xl text-2xl">{"💰"+((est.vendidos||[]).length>0?" "+(est.vendidos||[]).length:"")}</button>
               <button onClick={function(){setShowNuevoLote(true);}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08)"}} className="btn-flash bg-emerald-300 text-white font-black px-5 py-3 rounded-xl text-base border border-emerald-300">+ Lote</button>
             </div>
           </div>
@@ -2499,6 +2777,7 @@ function VistaEstablecimiento({estId,establecimientos,setEstablecimientos,onBack
       {showNuevoLote&&<NuevoLoteModal onClose={function(){setShowNuevoLote(false);}} onSave={function(nombre,tipo){logCambio("lote_creado","Nuevo lote "+nombre,"Tipo: "+tipo);setLotes(function(prev){return [...prev,{id:Date.now(),nombre,tipo,animales:[],sesiones:[],sesionEnCurso:null,reproSesiones:[],agricultura:{registros:[],gastos:[],potreros:[]}}];});}}/>}
       {showAlertas&&<AlertasModal alertas={alertas} nombreEst={est.nombre} lotes={lotes} onClose={function(){setShowAlertas(false);}} onSave={function(al){setEstablecimientos(function(prev){return prev.map(function(e){return e.id===estId?Object.assign({},e,{alertas:al}):e;});});}}/>}
       {showToros&&<TorosModal est={est} onClose={function(){setShowToros(false);}} onUpdate={function(toros){setEstablecimientos(function(prev){return prev.map(function(e){return e.id===estId?Object.assign({},e,{toros}):e;});});}}/>}
+      {showVendidos&&<VendidosModal est={est} onClose={function(){setShowVendidos(false);}} onEliminar={function(animalId){setEstablecimientos(function(prev){return prev.map(function(e){return e.id===estId?Object.assign({},e,{vendidos:(e.vendidos||[]).filter(function(v){return v.id!==animalId;})}):e;});});}}/>}
       {showCuaderno&&<CuadernoModal notas={est.notas||""} onClose={function(){setShowCuaderno(false);}} onSave={function(n){setEstablecimientos(function(prev){return prev.map(function(e){return e.id===estId?Object.assign({},e,{notas:n}):e;});});}}/>}
       {showRenombrar&&<NuevoLoteModal loteEditar={{nombre:est.nombre}} onClose={function(){setShowRenombrar(false);}} onSave={function(nombre){setEstablecimientos(function(prev){return prev.map(function(e){return e.id===estId?Object.assign({},e,{nombre}):e;});});}}/>}
       {confirmDialog}
