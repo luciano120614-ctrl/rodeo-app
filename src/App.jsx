@@ -1754,7 +1754,7 @@ function AgroVistaLote({agro,onUpdate,loteNombre}){
                   <button key={p.id} onClick={function(){setPotreroActivo(p);}} className="w-full text-left bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
                     <div className="flex items-center justify-between">
                       <div>
-                        <p className="text-white font-black text-base">{p.nombre}</p>
+                        <p className="text-amber-900 font-black text-base">{p.nombre}</p>
                         <div className="flex gap-3 mt-1">
                           {p.hectareas>0&&<span className="text-[10px] text-amber-600 font-bold">{p.hectareas+" ha"}</span>}
                           <span className="text-[10px] text-amber-500">{acts.length+" actividades"}</span>
@@ -1865,7 +1865,7 @@ function AgroVistaLote({agro,onUpdate,loteNombre}){
         <div className="flex flex-col gap-3">
           <div style={{background:"#fffbeb"}} className=" border border-amber-200 rounded-xl p-3 text-center">
             <p className="text-[10px] text-amber-600 uppercase font-bold">Total gastos</p>
-            <p className="text-2xl font-black text-white">{"$"+gastos.reduce(function(s,g){return s+g.monto;},0).toLocaleString("es-AR")}</p>
+            <p className="text-2xl font-black text-amber-700">{"$"+gastos.reduce(function(s,g){return s+g.monto;},0).toLocaleString("es-AR")}</p>
           </div>
           <Inp label="Concepto" placeholder="Ej: Herbicida, Gasoil..." value={formGasto.concepto} onChange={function(e){setG("concepto",e.target.value);}}/>
           <div className="grid grid-cols-2 gap-3">
@@ -1890,11 +1890,11 @@ function AgroVistaLote({agro,onUpdate,loteNombre}){
               return(
                 <div key={g.id} className="bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 flex items-center justify-between">
                   <div>
-                    <p className="text-white font-bold text-sm">{g.concepto}</p>
+                    <p className="text-gray-900 font-bold text-sm">{g.concepto}</p>
                     <p className="text-green-600 text-xs">{fmtFecha(g.fecha)+(g.potrero?" · "+g.potrero:"")}</p>
                   </div>
                   <div className="flex items-center gap-2">
-                    <p className="text-white font-black">{"$"+g.monto.toLocaleString("es-AR")}</p>
+                    <p className="text-amber-700 font-black">{"$"+g.monto.toLocaleString("es-AR")}</p>
                     <button onClick={function(){ask("¿Eliminar?",function(){onUpdate(Object.assign({},agro,{gastos:gastos.filter(function(x){return x.id!==g.id;})}));});}} className="text-red-500 text-lg">✕</button>
                   </div>
                 </div>
