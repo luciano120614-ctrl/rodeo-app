@@ -2724,9 +2724,6 @@ function VistaEstablecimiento({estId,establecimientos,setEstablecimientos,onBack
             <div className="flex gap-2">
               <button onClick={function(){setShowToros(true);}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08)"}} className="btn-flash bg-white border border-gray-200 text-gray-700 font-bold px-4 py-3 rounded-xl text-base">🐂 Toros</button>
               <button onClick={function(){setShowCuaderno(true);}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08)"}} className="btn-flash bg-white border border-gray-200 text-gray-700 font-bold px-4 py-3 rounded-xl text-2xl">📓</button>
-              <button onClick={function(){setShowAlertas(true);}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08)"}} className={"btn-flash border font-bold px-4 py-3 rounded-xl text-2xl "+(alertasActivas.length>0?"bg-amber-500 border-amber-500 text-white":"bg-white border-gray-200 text-gray-700")}>
-                {"🔔"+(alertasActivas.length>0?" "+alertasActivas.length:"")}
-              </button>
               <button onClick={function(){setShowVendidos(true);}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08)"}} className="btn-flash bg-white border border-gray-200 text-gray-700 font-bold px-4 py-3 rounded-xl text-2xl">{"💰"+((est.vendidos||[]).length>0?" "+(est.vendidos||[]).length:"")}</button>
               <button onClick={function(){setShowNuevoLote(true);}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08)"}} className="btn-flash bg-emerald-300 text-white font-black px-5 py-3 rounded-xl text-base border border-emerald-300">+ Lote</button>
             </div>
@@ -3186,6 +3183,34 @@ function AppLogueado({user,syncError}){
             </div>
           </div>
         )}
+
+        {/* Banner de alertas pendientes - resumen global */}
+        {(function(){
+          var estsConAlertas=establecimientos.filter(function(e){
+            return (e.alertas||[]).some(function(a){var es=estadoAlerta(a.fechaHora,a.pasada);return es==="urgente"||es==="pronto";});
+          });
+          if(estsConAlertas.length===0)return null;
+          var totalActivas=estsConAlertas.reduce(function(s,e){return s+(e.alertas||[]).filter(function(a){var es=estadoAlerta(a.fechaHora,a.pasada);return es==="urgente"||es==="pronto";}).length;},0);
+          return(
+            <div className="bg-amber-50 border border-amber-300 rounded-2xl px-4 py-3 flex flex-col gap-2">
+              <div className="flex items-center gap-2">
+                <span className="text-2xl">🔔</span>
+                <p className="text-amber-900 font-black text-sm">{totalActivas+" alerta"+(totalActivas>1?"s":"")+" pendiente"+(totalActivas>1?"s":"")}</p>
+              </div>
+              <div className="flex flex-col gap-1">
+                {estsConAlertas.map(function(e){
+                  var cant=(e.alertas||[]).filter(function(a){var es=estadoAlerta(a.fechaHora,a.pasada);return es==="urgente"||es==="pronto";}).length;
+                  return(
+                    <button key={e.id} onClick={function(){setEstActivoId(e.id);}} className="text-left bg-white border border-amber-200 rounded-xl px-3 py-2 flex items-center justify-between">
+                      <p className="text-amber-800 text-sm font-bold">{e.nombre}</p>
+                      <span className="text-xs text-amber-700 font-bold">{cant+" →"}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Dashboard stats globales */}
         {establecimientos.length>0&&(function(){
