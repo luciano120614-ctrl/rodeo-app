@@ -102,7 +102,12 @@ function gdpTotal(pesajes){
 }
 function ultimoPeso(pesajes){
   if(!pesajes||pesajes.length===0)return null;
-  return [...pesajes].sort(function(a,b){return new Date(b.fecha)-new Date(a.fecha);})[0].peso;
+  return [...pesajes].sort(function(a,b){
+    var dif=new Date(b.fecha)-new Date(a.fecha);
+    if(dif!==0)return dif;
+    // Misma fecha: el de id más alto gana (los id son timestamps)
+    return (b.id||0)-(a.id||0);
+  })[0].peso;
 }
 function sumarDias(fecha,dias){
   var d=new Date(fecha+"T12:00:00");
