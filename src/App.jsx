@@ -682,15 +682,9 @@ function SesionPesaje({loteId,allLotes,setLotes,nombreLote,sesionInicial,onPausa
   function registrar(){
     if(!encontrado||!peso)return;
     if(yaRegistrado)return;
-    var np={id:Date.now(),peso:parseFloat(peso),fecha};
-    var animalAct=Object.assign({},encontrado,{pesajes:[...(encontrado.pesajes||[]),np]});
-    setLotes(function(prev){
-      return prev.map(function(l){
-        if(l.id!==loteId)return l;
-        return Object.assign({},l,{animales:l.animales.map(function(a){return a.id===animalAct.id?animalAct:a;})});
-      });
-    });
-    var ga=gdpTotal(animalAct.pesajes);
+    // NO guardamos en setLotes aquí - eso lo hace finalizarSesion para evitar duplicados.
+    // El pesaje queda solo en el "log" de la sesión hasta que se haga FIN.
+    var ga=encontrado.pesajes&&encontrado.pesajes.length>=1?gdpTotal([...(encontrado.pesajes||[]),{peso:parseFloat(peso),fecha:fecha}]):null;
     var upAnterior=ultimoPeso(encontrado.pesajes);
     var diasTrans=encontrado.pesajes&&encontrado.pesajes.length>0?
       Math.round((new Date(fecha)-new Date([...encontrado.pesajes].sort(function(a,b){return new Date(b.fecha)-new Date(a.fecha);})[0].fecha))/86400000):null;
@@ -721,45 +715,22 @@ function SesionPesaje({loteId,allLotes,setLotes,nombreLote,sesionInicial,onPausa
   function guardarEdicion(r){
     var nuevoPeso=parseFloat(pesoEdit);
     if(isNaN(nuevoPeso)||nuevoPeso<=0){setEditandoId(null);return;}
-    // Actualizar log
+    // Solo actualizar log - el animal se actualiza recién al hacer FIN
     setLog(function(prev){return prev.map(function(x){
       if(x.id!==r.id)return x;
-      // Recalcular kg ganados usando el animal original
       var anim=animalesActuales.find(function(a){return a.caravana===r.caravana;});
-      var pesajesAnt=anim?(anim.pesajes||[]).filter(function(p){return p.fecha!==fecha;}):[];
-      var upAnt=pesajesAnt.length>0?[...pesajesAnt].sort(function(a,b){return new Date(b.fecha)-new Date(a.fecha);})[0].peso:null;
+      var upAnt=anim&&anim.pesajes&&anim.pesajes.length>0?
+        [...anim.pesajes].sort(function(a,b){return new Date(b.fecha)-new Date(a.fecha);})[0].peso:null;
       var kgGan=upAnt!==null?parseFloat((nuevoPeso-upAnt).toFixed(1)):null;
       return Object.assign({},x,{peso:nuevoPeso,kgGanados:kgGan});
     });});
-    // Actualizar el pesaje en el animal (en el lote)
-    setLotes(function(prev){
-      return prev.map(function(l){
-        if(l.id!==loteId)return l;
-        return Object.assign({},l,{animales:l.animales.map(function(a){
-          if(a.caravana!==r.caravana)return a;
-          return Object.assign({},a,{pesajes:(a.pesajes||[]).map(function(p){
-            if(p.fecha===fecha)return Object.assign({},p,{peso:nuevoPeso});
-            return p;
-          })});
-        })});
-      });
-    });
     setEditandoId(null);
     setPesoEdit("");
   }
 
   function eliminarDelLog(r){
+    // Solo sacar del log - el animal nunca tuvo el pesaje (se agrega al FIN)
     setLog(function(prev){return prev.filter(function(x){return x.id!==r.id;});});
-    // Eliminar el pesaje del animal
-    setLotes(function(prev){
-      return prev.map(function(l){
-        if(l.id!==loteId)return l;
-        return Object.assign({},l,{animales:l.animales.map(function(a){
-          if(a.caravana!==r.caravana)return a;
-          return Object.assign({},a,{pesajes:(a.pesajes||[]).filter(function(p){return p.fecha!==fecha;})});
-        })});
-      });
-    });
   }
 
   return(
@@ -2309,7 +2280,9 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
         var animalesAct=l.animales.map(function(a){
           var reg=s.registros.find(function(r){return r.caravana===a.caravana;});
           if(!reg)return a;
-          return Object.assign({},a,{pesajes:[...(a.pesajes||[]),{id:Date.now()+Math.random(),peso:reg.peso,fecha:s.fecha}]});
+          // Quitar pesajes duplicados con la misma fecha (bug viejo) y agregar el del registro
+          var sinDup=(a.pesajes||[]).filter(function(p){return p.fecha!==s.fecha;});
+          return Object.assign({},a,{pesajes:[...sinDup,{id:Date.now()+Math.random(),peso:reg.peso,fecha:s.fecha}]});
         });
         return Object.assign({},l,{animales:animalesAct,sesiones:[...(l.sesiones||[]),Object.assign({},s,{id:Date.now()})],sesionEnCurso:null});
       });
