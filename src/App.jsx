@@ -2732,12 +2732,21 @@ function VistaEstablecimiento({estId,establecimientos,setEstablecimientos,onBack
       </header>
 
       <main className="max-w-xl mx-auto px-4 py-4 flex flex-col gap-3">
-        {alertasActivas.length>0&&(
-          <button onClick={function(){setShowAlertas(true);}} className="w-full text-left bg-amber-900/20 border border-amber-700/50 rounded-2xl px-4 py-3">
+        {alertasActivas.length>0?(
+          <button onClick={function(){setShowAlertas(true);}} className="w-full text-left bg-amber-50 border border-amber-300 rounded-2xl px-4 py-3 flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <span className="text-amber-400">🔔</span>
-              <p className="text-amber-300 font-bold text-sm">{alertasActivas.length+" alerta"+(alertasActivas.length>1?"s":"")+" pendiente"+(alertasActivas.length>1?"s":"")}</p>
+              <span className="text-2xl">🔔</span>
+              <p className="text-amber-800 font-bold text-sm">{alertasActivas.length+" alerta"+(alertasActivas.length>1?"s":"")+" pendiente"+(alertasActivas.length>1?"s":"")}</p>
             </div>
+            <span className="text-amber-700 text-sm font-bold">Ver →</span>
+          </button>
+        ):(
+          <button onClick={function(){setShowAlertas(true);}} className="w-full text-left bg-white border border-gray-200 rounded-2xl px-4 py-3 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-2xl">🔔</span>
+              <p className="text-gray-700 font-bold text-sm">Sin alertas pendientes</p>
+            </div>
+            <span className="text-emerald-600 text-sm font-bold">+ Nueva</span>
           </button>
         )}
 
