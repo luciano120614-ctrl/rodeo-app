@@ -2280,9 +2280,11 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
         var animalesAct=l.animales.map(function(a){
           var reg=s.registros.find(function(r){return r.caravana===a.caravana;});
           if(!reg)return a;
-          // Quitar pesajes duplicados con la misma fecha (bug viejo) y agregar el del registro
-          var sinDup=(a.pesajes||[]).filter(function(p){return p.fecha!==s.fecha;});
-          return Object.assign({},a,{pesajes:[...sinDup,{id:Date.now()+Math.random(),peso:reg.peso,fecha:s.fecha}]});
+          // Verificar si ya existe un pesaje con esta misma fecha y peso (duplicado del bug anterior)
+          var pesajesActuales=a.pesajes||[];
+          var yaExiste=pesajesActuales.some(function(p){return p.fecha===s.fecha&&p.peso===reg.peso;});
+          if(yaExiste)return a; // No agregar si ya está
+          return Object.assign({},a,{pesajes:[...pesajesActuales,{id:Date.now()+Math.random(),peso:reg.peso,fecha:s.fecha}]});
         });
         return Object.assign({},l,{animales:animalesAct,sesiones:[...(l.sesiones||[]),Object.assign({},s,{id:Date.now()})],sesionEnCurso:null});
       });
