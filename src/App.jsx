@@ -416,6 +416,7 @@ function DetalleModal({animal,onClose,onUpdate,onDelete,lotes,loteActualId,estab
   var [estDestino,setEstDestino]=useState("");
   var [loteEnEst,setLoteEnEst]=useState("");
   var [showVender,setShowVender]=useState(false);
+  var [showEditar,setShowEditar]=useState(false);
   var [formSan,setFormSan]=useState({tipo:"Vacuna",nombre:"",fecha:hoy(),proxima:"",obs:""});
   var [ask,confirmDialog]=useConfirm();
   var pesoRef=useRef();
@@ -486,6 +487,8 @@ function DetalleModal({animal,onClose,onUpdate,onDelete,lotes,loteActualId,estab
               );
             })}
           </div>
+
+          <button onClick={function(){setShowEditar(true);}} className="w-full text-sm text-sky-700 border border-sky-300 bg-sky-50 px-3 py-2 rounded-xl font-bold">✏️ Editar datos del animal</button>
 
           {/* GDP si existe */}
           {g!==null&&(
@@ -566,6 +569,7 @@ function DetalleModal({animal,onClose,onUpdate,onDelete,lotes,loteActualId,estab
       )}
 
       {showVender&&<VenderAnimalModal animal={animal} loteNombre={nombreLote||""} onClose={function(){setShowVender(false);}} onVender={function(datosVenta){onVender&&onVender(animal,datosVenta);setShowVender(false);onClose();}}/>}
+      {showEditar&&<EditarAnimalModal animal={animal} onClose={function(){setShowEditar(false);}} onGuardar={function(datos){onUpdate(Object.assign({},animal,datos));setShowEditar(false);}}/>}
 
       {tab==="pesajes"&&(
         <div className="flex flex-col gap-2">
@@ -1533,6 +1537,54 @@ function ReproModal({lote,onClose,onUpdate,toros}){
 }
 
 // ── Toros Modal ───────────────────────────────────────────────────────────────
+// ── Editar Animal Modal ────────────────────────────────────────────────────────
+function EditarAnimalModal({animal,onClose,onGuardar}){
+  var [f,setF]=useState({
+    caravana:animal.caravana||"",
+    sexo:animal.sexo||"",
+    categoria:animal.categoria||"",
+    raza:animal.raza||"",
+    fechaNac:animal.fechaNac||"",
+    obs:animal.obs||""
+  });
+  function set(k,v){setF(function(p){return Object.assign({},p,{[k]:v});});}
+  function guardar(){
+    if(!f.caravana.trim()){alert("La caravana es obligatoria");return;}
+    if(!f.sexo){alert("Falta el sexo");return;}
+    if(!f.categoria){alert("Falta la categoría");return;}
+    onGuardar({
+      caravana:f.caravana.trim().toUpperCase(),
+      sexo:f.sexo,
+      categoria:f.categoria,
+      raza:f.raza,
+      fechaNac:f.fechaNac,
+      obs:f.obs
+    });
+  }
+  return(
+    <Modal title={"✏️ Editar "+animal.caravana} onClose={onClose}>
+      <div className="flex flex-col gap-3">
+        <Inp label="Caravana *" value={f.caravana} onChange={function(e){set("caravana",e.target.value);}}/>
+        <div className="grid grid-cols-2 gap-2">
+          <Sel label="Sexo *" options={["Macho","Hembra"]} value={f.sexo} onChange={function(e){set("sexo",e.target.value);}}/>
+          <Sel label="Categoría *" options={CATEGORIAS} value={f.categoria} onChange={function(e){set("categoria",e.target.value);}}/>
+        </div>
+        <Sel label="Raza" options={RAZAS} value={f.raza} onChange={function(e){set("raza",e.target.value);}}/>
+        <Inp label="Fecha de nacimiento" type="date" value={f.fechaNac} onChange={function(e){set("fechaNac",e.target.value);}}/>
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] text-green-600 font-bold uppercase">Observaciones</label>
+          <textarea rows={2} value={f.obs} onChange={function(e){set("obs",e.target.value);}}
+            className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-gray-800 text-sm focus:outline-none focus:border-green-400 resize-none"/>
+        </div>
+        <div className="flex gap-2 pt-1">
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl border border-gray-200 text-gray-700 text-sm font-bold">Cancelar</button>
+          <button onClick={guardar} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12)"}} className="flex-1 bg-emerald-300 text-white font-black py-2.5 rounded-xl text-sm border border-emerald-300">Guardar</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // ── Vender Animal Modal ────────────────────────────────────────────────────────
 function VenderAnimalModal({animal,loteNombre,onClose,onVender}){
   var ultPeso=animal.pesajes&&animal.pesajes.length>0?[...animal.pesajes].sort(function(a,b){return b.fecha.localeCompare(a.fecha);})[0]:null;
