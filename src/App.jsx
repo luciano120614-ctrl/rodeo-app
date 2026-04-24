@@ -1292,11 +1292,11 @@ function ReproModal({lote,onClose,onUpdate,toros}){
             </div>
           )}
           {sesionActual&&log.length>0&&(
-            <div className="bg-amber-950/30 border border-amber-700 rounded-xl px-4 py-3">
-              <p className="text-amber-300 font-bold text-sm">{"⏸ Sesión pausada · "+(sesionActual.tipo==="tacto"?"Tacto":sesionActual.tipo==="servicio"?"Servicio":"Partos")}</p>
+            <div className="bg-amber-50 border border-amber-300 rounded-xl px-4 py-3">
+              <p className="text-amber-800 font-bold text-sm">{"⏸ Sesión pausada · "+(sesionActual.tipo==="tacto"?"Tacto":sesionActual.tipo==="servicio"?"Servicio":"Partos")}</p>
               <p className="text-amber-600 text-xs">{log.length+" registros"}</p>
               <div className="flex gap-2 mt-2">
-                <button onClick={function(){setModo("manga");}} style={{boxShadow:"0 1px 2px rgba(0,0,0,0.1)"}} className="flex-1 bg-amber-700 text-white font-bold py-2 rounded-xl text-sm border border-amber-500">▶ Retomar</button>
+                <button onClick={function(){setModo("manga");}} style={{boxShadow:"0 1px 2px rgba(0,0,0,0.1)"}} className="flex-1 bg-amber-400 text-amber-900 font-bold py-2 rounded-xl text-sm border border-amber-400">▶ Retomar</button>
                 <button onClick={function(){setSesionActual(null);setLog([]);}} className="flex-1 bg-pink-50 text-pink-600 font-bold py-2 rounded-xl text-sm border border-pink-200">✕ Descartar</button>
               </div>
             </div>
@@ -1323,7 +1323,7 @@ function ReproModal({lote,onClose,onUpdate,toros}){
                   <button key={s.id} onClick={function(){setSesionActual(Object.assign({},s,{soloVer:true}));setLog(s.registros);setModo("resumen");}}
                     className="w-full text-left bg-pink-50 border border-pink-200 rounded-xl px-4 py-3 flex items-center justify-between">
                     <div>
-                      <p className="text-white font-black text-sm">{fmtFecha(s.fecha)+" · "+(s.tipo==="tacto"?"Tacto":s.tipo==="servicio"?"Servicio":"Partos")}</p>
+                      <p className="text-pink-900 font-black text-sm">{fmtFecha(s.fecha)+" · "+(s.tipo==="tacto"?"Tacto":s.tipo==="servicio"?"Servicio":"Partos")}</p>
                       <p className="text-pink-500 text-xs">{s.registros.length+" animales"}</p>
                     </div>
                     <div className="flex items-center gap-2">
@@ -1494,18 +1494,18 @@ function ReproModal({lote,onClose,onUpdate,toros}){
         <div className="flex flex-col gap-3">
           <div className="grid grid-cols-2 gap-2">
             <div style={{background:"#fdf2f8"}} className=" border border-pink-200 rounded-xl p-3 text-center">
-              <p className="text-2xl font-black text-white">{log.length}</p>
+              <p className="text-2xl font-black text-pink-700">{log.length}</p>
               <p className="text-[10px] text-pink-600 uppercase mt-1">Animales</p>
             </div>
             {sesionActual.tipo==="tacto"&&(
               <div style={{background:"#fdf2f8"}} className=" border border-pink-200 rounded-xl p-3 text-center">
-                <p className="text-2xl font-black text-green-300">{log.filter(function(r){return r.resultado==="Preñada";}).length}</p>
+                <p className="text-2xl font-black text-emerald-700">{log.filter(function(r){return r.resultado==="Preñada";}).length}</p>
                 <p className="text-[10px] text-pink-600 uppercase mt-1">Preñadas</p>
               </div>
             )}
             {sesionActual.tipo==="parto"&&(
               <div style={{background:"#fdf2f8"}} className=" border border-pink-200 rounded-xl p-3 text-center">
-                <p className="text-2xl font-black text-green-300">{log.filter(function(r){return r.vivo;}).length}</p>
+                <p className="text-2xl font-black text-emerald-700">{log.filter(function(r){return r.vivo;}).length}</p>
                 <p className="text-[10px] text-pink-600 uppercase mt-1">Vivos</p>
               </div>
             )}
@@ -1515,14 +1515,14 @@ function ReproModal({lote,onClose,onUpdate,toros}){
               return(
                 <div key={r.id} className="flex items-center justify-between bg-pink-50 border border-pink-200 rounded-xl px-3 py-2">
                   <div>
-                    <p className="text-white font-bold text-sm">{r.caravana}</p>
+                    <p className="text-pink-900 font-bold text-sm">{r.caravana}</p>
                     <p className="text-pink-500 text-xs">{r.categoria}</p>
                   </div>
                   <div className="text-right">
-                    {r.resultado&&<p className={"text-sm font-bold "+(r.resultado==="Preñada"?"text-green-300":r.resultado==="Vacía"?"text-red-300":"text-amber-300")}>{r.resultado}</p>}
-                    {r.tipo&&<p className="text-pink-600 text-sm">{r.tipo+(r.toro&&r.toro!=="__otro"?" · "+r.toro:"")}</p>}
-                    {r.fechaPartoProbable&&<p className="text-amber-400 text-xs">{"🐄 Parto est.: "+fmtFecha(r.fechaPartoProbable)}</p>}
-                    {r.vivo!==undefined&&<p className={"text-sm font-bold "+(r.vivo?"text-green-300":"text-red-300")}>{r.vivo?"Vivo":"Muerto"}</p>}
+                    {r.resultado&&<p className={"text-sm font-bold "+(r.resultado==="Preñada"?"text-emerald-700":r.resultado==="Vacía"?"text-red-600":"text-amber-700")}>{r.resultado}</p>}
+                    {r.tipo&&<p className="text-pink-700 text-sm">{r.tipo+(r.toro&&r.toro!=="__otro"?" · "+r.toro:"")}</p>}
+                    {r.fechaPartoProbable&&<p className="text-amber-700 text-xs">{"🐄 Parto est.: "+fmtFecha(r.fechaPartoProbable)}</p>}
+                    {r.vivo!==undefined&&<p className={"text-sm font-bold "+(r.vivo?"text-emerald-700":"text-red-600")}>{r.vivo?"Vivo":"Muerto"}</p>}
                     {r.obs&&<p className="text-pink-500 text-xs">{r.obs}</p>}
                   </div>
                 </div>
