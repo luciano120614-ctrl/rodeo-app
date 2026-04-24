@@ -209,6 +209,32 @@ function exportDatosSesion(sesion,nombreLote){
   return {titulo:"Sesión "+nombreLote+" - "+fmtFecha(sesion.fecha),headers,rows};
 }
 
+function exportDatosRepro(sesion,nombreLote){
+  var tipoLbl=sesion.tipo==="tacto"?"Tacto":sesion.tipo==="servicio"?"Servicio":"Partos";
+  var headers,rows;
+  if(sesion.tipo==="tacto"){
+    headers=["Caravana","Categoría","Resultado","Fecha parto probable","Observaciones"];
+    rows=sesion.registros.map(function(r){
+      return [r.caravana,r.categoria||"",r.resultado||"",
+        r.fechaPartoProbable?fmtFecha(r.fechaPartoProbable):"",r.obs||""];
+    });
+  }else if(sesion.tipo==="servicio"){
+    headers=["Caravana","Categoría","Tipo","Toro","Fecha servicio","Observaciones"];
+    rows=sesion.registros.map(function(r){
+      return [r.caravana,r.categoria||"",r.tipo||"",
+        r.toro&&r.toro!=="__otro"?r.toro:"",
+        r.fechaServicio?fmtFecha(r.fechaServicio):"",r.obs||""];
+    });
+  }else{
+    headers=["Caravana","Categoría","Estado","Sexo ternero","Caravana ternero","Observaciones"];
+    rows=sesion.registros.map(function(r){
+      return [r.caravana,r.categoria||"",r.vivo?"Vivo":"Muerto",
+        r.sexoTernero||"",r.caravanaTernero||"",r.obs||""];
+    });
+  }
+  return {titulo:tipoLbl+" "+nombreLote+" - "+fmtFecha(sesion.fecha),headers,rows};
+}
+
 // ── UI base ───────────────────────────────────────────────────────────────────
 function Badge({text,color}){
   var cls="text-xs px-2 py-0.5 rounded-full font-semibold border ";
@@ -1194,6 +1220,7 @@ function ReproModal({lote,onClose,onUpdate,toros}){
   var [form,setForm]=useState({resultado:"Preñada",tipo:"Natural",toro:"",vivo:true,sexoTernero:"Macho",caravanaTernero:"",obs:"",fechaServicio:hoy()});
   var busqRef=useRef();
   var [ask,confirmDialog]=useConfirm();
+  var [exportRepro,setExportRepro]=useState(null);
 
   function setF(k,v){setForm(function(p){return Object.assign({},p,{[k]:v});});}
 
@@ -1489,46 +1516,139 @@ function ReproModal({lote,onClose,onUpdate,toros}){
   // ── RESUMEN SESIÓN ──
   if(modo==="resumen"){
     var tipoLbl=sesionActual.tipo==="tacto"?"Tacto":sesionActual.tipo==="servicio"?"Servicio":"Partos";
+    var totalRegs=log.length;
+    // Stats según tipo
+    var prenadas=log.filter(function(r){return r.resultado==="Preñada";}).length;
+    var vacias=log.filter(function(r){return r.resultado==="Vacía";}).length;
+    var dudosas=log.filter(function(r){return r.resultado==="Dudosa";}).length;
+    var vivos=log.filter(function(r){return r.vivo===true;}).length;
+    var muertos=log.filter(function(r){return r.vivo===false;}).length;
+    var machos=log.filter(function(r){return r.sexoTernero==="Macho";}).length;
+    var hembrasT=log.filter(function(r){return r.sexoTernero==="Hembra";}).length;
+    var natural=log.filter(function(r){return r.tipo==="Natural";}).length;
+    var ia=log.filter(function(r){return r.tipo==="IA";}).length;
+    // Faltantes (solo para sesiones activas, no soloVer)
+    var totalHembras=hembras.length;
+    var caravanasRegs=log.map(function(r){return r.caravana;});
+    var faltantes=hembras.filter(function(h){return caravanasRegs.indexOf(h.caravana)===-1;});
+
     return(
       <Modal title={"📋 "+tipoLbl+" · "+fmtFecha(sesionActual.fecha)} onClose={function(){if(sesionActual.soloVer){setSesionActual(null);setLog([]);}setModo("menu");}}>
         <div className="flex flex-col gap-3">
+          {/* Stats principales - 2 columnas */}
           <div className="grid grid-cols-2 gap-2">
-            <div style={{background:"#fdf2f8"}} className=" border border-pink-200 rounded-xl p-3 text-center">
-              <p className="text-2xl font-black text-pink-700">{log.length}</p>
-              <p className="text-[10px] text-pink-600 uppercase mt-1">Animales</p>
+            <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 text-center">
+              <p className="text-[10px] text-gray-500 uppercase font-bold mb-0.5">🐄 Animales</p>
+              <p className="text-2xl font-black text-gray-900">{totalRegs}</p>
             </div>
             {sesionActual.tipo==="tacto"&&(
-              <div style={{background:"#fdf2f8"}} className=" border border-pink-200 rounded-xl p-3 text-center">
-                <p className="text-2xl font-black text-emerald-700">{log.filter(function(r){return r.resultado==="Preñada";}).length}</p>
-                <p className="text-[10px] text-pink-600 uppercase mt-1">Preñadas</p>
+              <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 text-center">
+                <p className="text-[10px] text-gray-500 uppercase font-bold mb-0.5">✅ Preñadas</p>
+                <p className="text-2xl font-black text-emerald-700">{prenadas}</p>
+              </div>
+            )}
+            {sesionActual.tipo==="servicio"&&(
+              <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 text-center">
+                <p className="text-[10px] text-gray-500 uppercase font-bold mb-0.5">💉 Total servicios</p>
+                <p className="text-2xl font-black text-gray-900">{totalRegs}</p>
               </div>
             )}
             {sesionActual.tipo==="parto"&&(
-              <div style={{background:"#fdf2f8"}} className=" border border-pink-200 rounded-xl p-3 text-center">
-                <p className="text-2xl font-black text-emerald-700">{log.filter(function(r){return r.vivo;}).length}</p>
-                <p className="text-[10px] text-pink-600 uppercase mt-1">Vivos</p>
+              <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 text-center">
+                <p className="text-[10px] text-gray-500 uppercase font-bold mb-0.5">💚 Vivos</p>
+                <p className="text-2xl font-black text-emerald-700">{vivos}</p>
               </div>
             )}
           </div>
-          <div className="flex flex-col gap-1.5 max-h-64 overflow-y-auto">
+
+          {/* Stats secundarios según tipo */}
+          {sesionActual.tipo==="tacto"&&(
+            <div className="grid grid-cols-2 gap-2">
+              <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 text-center">
+                <p className="text-[10px] text-gray-500 uppercase font-bold mb-0.5">❌ Vacías</p>
+                <p className="text-xl font-black text-red-600">{vacias}</p>
+              </div>
+              <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 text-center">
+                <p className="text-[10px] text-gray-500 uppercase font-bold mb-0.5">❓ Dudosas</p>
+                <p className="text-xl font-black text-amber-600">{dudosas}</p>
+              </div>
+            </div>
+          )}
+          {sesionActual.tipo==="servicio"&&(
+            <div className="grid grid-cols-2 gap-2">
+              <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 text-center">
+                <p className="text-[10px] text-gray-500 uppercase font-bold mb-0.5">🐂 Natural</p>
+                <p className="text-xl font-black text-gray-900">{natural}</p>
+              </div>
+              <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 text-center">
+                <p className="text-[10px] text-gray-500 uppercase font-bold mb-0.5">💉 IA</p>
+                <p className="text-xl font-black text-gray-900">{ia}</p>
+              </div>
+            </div>
+          )}
+          {sesionActual.tipo==="parto"&&(
+            <>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 text-center">
+                  <p className="text-[10px] text-gray-500 uppercase font-bold mb-0.5">💔 Muertos</p>
+                  <p className="text-xl font-black text-red-600">{muertos}</p>
+                </div>
+                <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 text-center">
+                  <p className="text-[10px] text-gray-500 uppercase font-bold mb-0.5">📊 Total</p>
+                  <p className="text-xl font-black text-gray-900">{totalRegs}</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-center">
+                  <p className="text-[10px] text-blue-600 uppercase font-bold mb-0.5">♂ Machos</p>
+                  <p className="text-xl font-black text-blue-700">{machos}</p>
+                </div>
+                <div className="bg-pink-50 border border-pink-200 rounded-xl p-3 text-center">
+                  <p className="text-[10px] text-pink-600 uppercase font-bold mb-0.5">♀ Hembras</p>
+                  <p className="text-xl font-black text-pink-700">{hembrasT}</p>
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* Banner faltantes (solo si no es soloVer y hay faltantes en tacto/servicio) */}
+          {!sesionActual.soloVer&&sesionActual.tipo!=="parto"&&faltantes.length>0&&(
+            <div className="bg-amber-50 border border-amber-300 rounded-xl px-3 py-2.5 flex items-center gap-2">
+              <span className="text-2xl">⚠️</span>
+              <div className="flex-1">
+                <p className="text-amber-800 font-bold text-sm">{"Faltaron "+faltantes.length+" animal"+(faltantes.length>1?"es":"")+" por "+(sesionActual.tipo==="tacto"?"tactar":"servicio")}</p>
+                <p className="text-amber-600 text-xs">{"de "+totalHembras+" totales en el lote"}</p>
+              </div>
+            </div>
+          )}
+
+          {/* Listado de registros */}
+          <div className="flex flex-col gap-1.5 max-h-72 overflow-y-auto">
             {log.map(function(r){
               return(
-                <div key={r.id} className="flex items-center justify-between bg-pink-50 border border-pink-200 rounded-xl px-3 py-2">
-                  <div>
-                    <p className="text-pink-900 font-bold text-sm">{r.caravana}</p>
-                    <p className="text-pink-500 text-xs">{r.categoria}</p>
+                <div key={r.id} className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 flex items-center justify-between">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-gray-900 font-black text-sm">{r.caravana}</p>
+                    <p className="text-gray-500 text-xs">{r.categoria||""}</p>
                   </div>
-                  <div className="text-right">
+                  <div className="text-right ml-2">
                     {r.resultado&&<p className={"text-sm font-bold "+(r.resultado==="Preñada"?"text-emerald-700":r.resultado==="Vacía"?"text-red-600":"text-amber-700")}>{r.resultado}</p>}
-                    {r.tipo&&<p className="text-pink-700 text-sm">{r.tipo+(r.toro&&r.toro!=="__otro"?" · "+r.toro:"")}</p>}
-                    {r.fechaPartoProbable&&<p className="text-amber-700 text-xs">{"🐄 Parto est.: "+fmtFecha(r.fechaPartoProbable)}</p>}
+                    {r.tipo&&<p className="text-gray-700 text-xs">{r.tipo+(r.toro&&r.toro!=="__otro"?" · "+r.toro:"")}</p>}
+                    {r.fechaPartoProbable&&<p className="text-amber-700 text-[10px]">{"🐄 "+fmtFecha(r.fechaPartoProbable)}</p>}
                     {r.vivo!==undefined&&<p className={"text-sm font-bold "+(r.vivo?"text-emerald-700":"text-red-600")}>{r.vivo?"Vivo":"Muerto"}</p>}
-                    {r.obs&&<p className="text-pink-500 text-xs">{r.obs}</p>}
+                    {r.sexoTernero&&<p className={"text-xs font-bold "+(r.sexoTernero==="Macho"?"text-blue-700":"text-pink-700")}>{r.sexoTernero==="Macho"?"♂ Macho":"♀ Hembra"}</p>}
+                    {r.obs&&<p className="text-gray-500 text-[10px] mt-0.5">{r.obs}</p>}
                   </div>
                 </div>
               );
             })}
           </div>
+
+          {/* Exportar a Excel */}
+          {log.length>0&&(
+            <button onClick={function(){setExportRepro(exportDatosRepro(Object.assign({},sesionActual,{registros:log}),lote.nombre));}} className="w-full bg-gray-50 border border-gray-200 text-gray-700 font-bold py-2.5 rounded-xl text-sm">📊 Exportar a Excel</button>
+          )}
+          {exportRepro&&<ExportModal {...exportRepro} onClose={function(){setExportRepro(null);}}/>}
         </div>
       </Modal>
     );
