@@ -3253,51 +3253,6 @@ function AppLogueado({user,syncError}){
           );
         })()}
 
-        {/* Dashboard stats globales */}
-        {establecimientos.length>0&&(function(){
-          var totalAnim=establecimientos.reduce(function(s,e){return s+(e.lotes||[]).reduce(function(s2,l){return s2+(l.animales||[]).length;},0);},0);
-          var totalLotes=establecimientos.reduce(function(s,e){return s+(e.lotes||[]).length;},0);
-          var totalAlertas=establecimientos.reduce(function(s,e){return s+(e.alertas||[]).filter(function(a){var es=estadoAlerta(a.fechaHora,a.pasada);return es==="urgente"||es==="pronto";}).length;},0);
-          // Próximos partos (60 días)
-          var hoyD=new Date();var en60=new Date();en60.setDate(en60.getDate()+60);
-          var partosProx=0;
-          establecimientos.forEach(function(e){
-            (e.lotes||[]).forEach(function(l){
-              (l.reproSesiones||[]).filter(function(s){return s.tipo==="servicio";}).forEach(function(s){
-                (s.registros||[]).forEach(function(r){
-                  if(!r.fechaPartoProbable)return;
-                  var fp=new Date(r.fechaPartoProbable+"T12:00:00");
-                  if(fp>=hoyD&&fp<=en60)partosProx++;
-                });
-              });
-            });
-          });
-          return(
-            <div className="grid grid-cols-2 gap-2">
-              <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-3 text-center">
-                <p className="text-2xl font-black text-emerald-700">{totalAnim}</p>
-                <p className="text-[10px] text-emerald-600 uppercase font-bold">Animales totales</p>
-              </div>
-              <div className="bg-gray-50 border border-gray-200 rounded-2xl p-3 text-center">
-                <p className="text-2xl font-black text-gray-700">{totalLotes}</p>
-                <p className="text-[10px] text-gray-500 uppercase font-bold">Lotes</p>
-              </div>
-              {totalAlertas>0&&(
-                <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3 text-center">
-                  <p className="text-2xl font-black text-amber-700">🔔 {totalAlertas}</p>
-                  <p className="text-[10px] text-amber-600 uppercase font-bold">Alertas activas</p>
-                </div>
-              )}
-              {partosProx>0&&(
-                <div className="bg-rose-50 border border-rose-200 rounded-2xl p-3 text-center">
-                  <p className="text-2xl font-black text-rose-700">🐄 {partosProx}</p>
-                  <p className="text-[10px] text-rose-600 uppercase font-bold">Partos (60d)</p>
-                </div>
-              )}
-            </div>
-          );
-        })()}
-
         {/* Recordatorio de backup */}
         {establecimientos.length>0&&(function(){
           var diasDesde=null;
