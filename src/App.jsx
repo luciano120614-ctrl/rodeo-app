@@ -1340,7 +1340,13 @@ function HistorialModal({sesiones,onClose,onVerSesion,onEliminarSesion}){
 
         {aniosDisp.length>1&&<FiltroAnio anios={aniosDisp} valor={anioFiltro} onChange={function(e){setAnioFiltro(e.target.value);}} total={sorted.length} filtrados={filtradasPorAnio.length}/>}
 
-        {filtradasPorAnio.length===0&&<p className="text-gray-400 text-center py-8">{anioFiltro?"Sin sesiones en "+anioFiltro:"Sin sesiones guardadas"}</p>}
+        {filtradasPorAnio.length===0&&(
+          <div className="text-center py-8">
+            <p className="text-4xl mb-2">⚖️</p>
+            <p className="text-gray-700 font-bold text-sm mb-1">{anioFiltro?"Sin sesiones en "+anioFiltro:"Aún no hiciste pesajes"}</p>
+            <p className="text-gray-400 text-xs">{anioFiltro?"Probá con otro año":"Iniciá una sesión desde Pesar"}</p>
+          </div>
+        )}
         {filtradasPorAnio.map(function(s){
           var totalKg=s.registros.reduce(function(acc,r){return acc+r.peso;},0);
           var selected=sel.includes(s.id);
@@ -2202,7 +2208,14 @@ function VendidosModal({est,onClose,onEliminar}){
             style={{background:"#f9fafb"}} className="border border-gray-200 rounded-xl px-3 py-2.5 text-gray-900 text-sm focus:outline-none w-full"/>
         )}
 
-        {totalAnimGral===0&&<div className="text-center py-12 text-gray-400"><p className="text-5xl mb-3">💰</p><p className="text-sm">Sin ventas registradas</p><p className="text-xs mt-2 text-gray-500">Marcá animales como vendidos desde su ficha</p></div>}
+        {totalAnimGral===0&&(
+          <div className="text-center py-12">
+            <p className="text-5xl mb-3">💰</p>
+            <p className="text-gray-800 font-bold text-base mb-1">Sin ventas registradas</p>
+            <p className="text-gray-500 text-xs mb-1">Cuando vendas un animal, va a aparecer acá</p>
+            <p className="text-gray-400 text-xs">Para vender: entrá al animal → tocá <b>"💰 Vender"</b></p>
+          </div>
+        )}
 
         {filtrados.map(function(v){
           return(
@@ -2336,7 +2349,13 @@ function AlertasModal({alertas,onClose,onSave,nombreEst,lotes}){
             </div>
           </div>
         )}
-        {sorted.length===0&&<p className="text-gray-400 text-center py-6">Sin alertas</p>}
+        {sorted.length===0&&(
+          <div className="text-center py-8">
+            <p className="text-5xl mb-2">🔔</p>
+            <p className="text-gray-700 font-bold text-sm mb-1">Sin alertas todavía</p>
+            <p className="text-gray-400 text-xs">Creá una para acordarte de tactos, vacunas, partos, etc.</p>
+          </div>
+        )}
         {sorted.map(function(a){
           var est=estadoAlerta(a.fechaHora,a.pasada);
           var loteNombre=a.loteId?(lotes||[]).find(function(l){return l.id===parseInt(a.loteId);})||null:null;
@@ -2542,7 +2561,13 @@ function AgroVistaLote({agro,onUpdate,loteNombre}){
                 </div>
               )}
             </div>
-            {registros.length===0&&<p className="text-gray-400 text-sm text-center py-4">Sin actividades</p>}
+            {registros.length===0&&(
+              <div className="text-center py-8">
+                <p className="text-4xl mb-2">🌾</p>
+                <p className="text-gray-700 font-bold text-sm mb-1">Sin actividades aún</p>
+                <p className="text-gray-400 text-xs">Cargá siembras, cosechas, fumigaciones, etc.</p>
+              </div>
+            )}
             {[...registros].sort(function(a,b){return b.fecha.localeCompare(a.fecha);}).filter(function(r){return (!anioActi||(r.fecha&&r.fecha.substring(0,4)===anioActi))&&(!tipoFiltro||r.actividad===tipoFiltro);}).map(function(r){
               return(
                 <div key={r.id} className="bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 flex items-start justify-between">
@@ -2594,7 +2619,13 @@ function AgroVistaLote({agro,onUpdate,loteNombre}){
           }} className="w-full bg-amber-400 text-amber-900 font-bold py-3 rounded-xl text-sm border border-amber-400">Guardar Gasto</button>
           <div className="flex flex-col gap-2 border-t border-gray-100 pt-3">
             {(function(){var aG=aniosDe(gastos);if(aG.length<=1)return null;var fc=anioGasto?gastos.filter(function(g){return g.fecha&&g.fecha.substring(0,4)===anioGasto;}).length:gastos.length;return <FiltroAnio anios={aG} valor={anioGasto} onChange={function(e){setAnioGasto(e.target.value);}} total={gastos.length} filtrados={fc}/>;})()}
-            {gastos.length===0&&<p className="text-gray-400 text-sm text-center py-4">Sin gastos</p>}
+            {gastos.length===0&&(
+              <div className="text-center py-8">
+                <p className="text-4xl mb-2">💰</p>
+                <p className="text-gray-700 font-bold text-sm mb-1">Sin gastos cargados</p>
+                <p className="text-gray-400 text-xs">Llevá el control de insumos, semillas, gasoil, etc.</p>
+              </div>
+            )}
             {[...gastos].sort(function(a,b){return b.fecha.localeCompare(a.fecha);}).filter(function(g){return !anioGasto||(g.fecha&&g.fecha.substring(0,4)===anioGasto);}).map(function(g){
               return(
                 <div key={g.id} className="bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 flex items-center justify-between">
@@ -3026,7 +3057,22 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
             </div>
 
             {filtrados.length===0?(
-              <div className="text-center py-16 text-gray-300"><p className="text-4xl mb-3">🌾</p><p className="text-sm">{animales.length===0?"Agregá el primer animal":"Sin resultados"}</p></div>
+              <div className="text-center py-12">
+                {animales.length===0?(
+                  <>
+                    <p className="text-5xl mb-3">🐄</p>
+                    <p className="text-gray-800 font-bold text-base mb-1">Aún no hay animales</p>
+                    <p className="text-gray-500 text-xs mb-2">Empezá cargando uno por uno</p>
+                    <p className="text-emerald-600 text-xs font-bold">Tocá "+ Animal" arriba</p>
+                  </>
+                ):(
+                  <>
+                    <p className="text-4xl mb-3">🔍</p>
+                    <p className="text-gray-500 text-sm">Sin resultados</p>
+                    <p className="text-gray-400 text-xs">Probá cambiar la búsqueda o los filtros</p>
+                  </>
+                )}
+              </div>
             ):(
               <div className="flex flex-col gap-2">
                 {[...filtrados].sort(function(a,b){return a.caravana.localeCompare(b.caravana);}).map(function(a){
@@ -3232,7 +3278,13 @@ function VistaEstablecimiento({estId,establecimientos,setEstablecimientos,onBack
         )}
 
         {lotes.length===0&&(
-          <div className="text-center py-16 text-gray-400"><p className="text-5xl mb-3">🐄</p><p className="text-sm">Creá el primer lote</p></div>
+          <div className="bg-gray-50 border border-gray-200 rounded-2xl p-6 text-center">
+            <p className="text-5xl mb-3">🐄</p>
+            <p className="text-gray-800 font-bold text-base mb-1">Creá tu primer lote</p>
+            <p className="text-gray-500 text-xs mb-2">Los lotes son grupos de animales</p>
+            <p className="text-gray-400 text-xs">Ejemplos: <b>Vaquillonas</b>, <b>Toros</b>, <b>Engorde</b>, <b>Cría</b>, <b>Recría</b></p>
+            <p className="text-emerald-600 text-xs mt-3 font-bold">Tocá "+ Lote" arriba para crear uno</p>
+          </div>
         )}
 
         {lotes.map(function(lote){
@@ -3656,10 +3708,41 @@ function AppLogueado({user,syncError}){
 
       <main className="max-w-xl mx-auto px-4 py-4 flex flex-col gap-3">
         {establecimientos.length===0&&(
-          <div className="text-center py-20 text-gray-400">
-            <p className="text-6xl mb-4">🐄</p>
-            <p className="text-xl font-black text-gray-500 mb-2">Bienvenido a Rodeo</p>
-            <p className="text-sm">Creá tu primer establecimiento para empezar</p>
+          <div className="flex flex-col gap-4 py-8">
+            <div className="text-center">
+              <p className="text-6xl mb-3">🐄</p>
+              <p className="text-2xl font-black text-gray-800 mb-1">¡Bienvenido a Rodeo!</p>
+              <p className="text-sm text-gray-500">La app para gestionar tu campo</p>
+            </div>
+
+            <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 flex flex-col gap-3">
+              <p className="text-emerald-800 font-bold text-sm">📝 Cómo empezar:</p>
+              <div className="flex items-start gap-3">
+                <div className="bg-emerald-300 text-white rounded-full w-7 h-7 flex items-center justify-center font-black text-sm shrink-0">1</div>
+                <div>
+                  <p className="text-gray-900 font-bold text-sm">Creá tu primer establecimiento</p>
+                  <p className="text-gray-600 text-xs">Es donde se guardan tus campos. Tocá <b>"+ Establecimiento"</b> arriba</p>
+                </div>
+              </div>
+              <div className="flex items-start gap-3">
+                <div className="bg-emerald-300 text-white rounded-full w-7 h-7 flex items-center justify-center font-black text-sm shrink-0">2</div>
+                <div>
+                  <p className="text-gray-900 font-bold text-sm">Agregá un lote</p>
+                  <p className="text-gray-600 text-xs">Los lotes son grupos de animales (ej: Vaquillonas, Toros, Engorde)</p>
+                </div>
+              </div>
+              <div className="flex items-start gap-3">
+                <div className="bg-emerald-300 text-white rounded-full w-7 h-7 flex items-center justify-center font-black text-sm shrink-0">3</div>
+                <div>
+                  <p className="text-gray-900 font-bold text-sm">Cargá tus animales</p>
+                  <p className="text-gray-600 text-xs">Y empezá a registrar pesajes, sanidad, reproducción y más</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-gray-50 border border-gray-200 rounded-xl p-3">
+              <p className="text-gray-700 text-xs"><b>💡 Tip:</b> Tus datos se guardan en la nube automáticamente. Podés acceder desde cualquier celular con tu cuenta.</p>
+            </div>
           </div>
         )}
 
