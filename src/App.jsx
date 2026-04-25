@@ -456,7 +456,7 @@ function MarcaForm({onAdd}){
 }
 
 // ── Detalle Animal Modal ──────────────────────────────────────────────────────
-function DetalleModal({animal,onClose,onUpdate,onDelete,lotes,loteActualId,establecimientos,estId,onMoverEst,onVender,nombreLote}){
+function DetalleModal({animal,onClose,onUpdate,onDelete,lotes,loteActualId,establecimientos,estId,onMoverEst,onVender,nombreLote,reproSesionesLote}){
   var [tab,setTab]=useState("info");
   var [obs,setObs]=useState(animal.obs||"");
   var [peso,setPeso]=useState("");
@@ -496,11 +496,11 @@ function DetalleModal({animal,onClose,onUpdate,onDelete,lotes,loteActualId,estab
   return(
     <Modal title={"Caravana "+animal.caravana} onClose={onClose}>
       <div className="flex gap-1 mb-3 bg-gray-100 rounded-xl p-1">
-        {["info","pesajes","sanidad"].map(function(t){
+        {(animal.sexo==="Hembra"?["info","pesajes","repro","sanidad"]:["info","pesajes","sanidad"]).map(function(t){
           return(
             <button key={t} onClick={function(){setTab(t);}}
-              className={"flex-1 py-2.5 rounded-xl text-xs font-bold tracking-wider transition-all "+(tab===t?"bg-white text-gray-900 shadow-sm":"text-gray-500")}>
-              {t==="info"?"📋 Info":t==="pesajes"?"⚖️ Pesajes":"💉 Sanidad"}
+              className={"flex-1 py-2 rounded-xl text-[10px] font-bold tracking-wider transition-all "+(tab===t?"bg-white text-gray-900 shadow-sm":"text-gray-500")}>
+              {t==="info"?"📋 Info":t==="pesajes"?"⚖️ Pesos":t==="repro"?"🐄 Repro":"💉 Sanidad"}
             </button>
           );
         })}
@@ -646,6 +646,138 @@ function DetalleModal({animal,onClose,onUpdate,onDelete,lotes,loteActualId,estab
           </div>
         </div>
       )}
+      {tab==="repro"&&animal.sexo==="Hembra"&&(function(){
+        // Buscar todas las apariciones del animal en sesiones reproductivas
+        var sesiones=reproSesionesLote||[];
+        var serviciosA=[];
+        var tactosA=[];
+        var partosA=[];
+        sesiones.forEach(function(s){
+          (s.registros||[]).forEach(function(r){
+            if(r.caravana!==animal.caravana)return;
+            var item=Object.assign({},r,{fechaSesion:s.fecha,tipoSesion:s.tipo});
+            if(s.tipo==="servicio")serviciosA.push(item);
+            else if(s.tipo==="tacto")tactosA.push(item);
+            else if(s.tipo==="parto")partosA.push(item);
+          });
+        });
+        // Ordenar por fecha desc (más reciente primero)
+        serviciosA.sort(function(a,b){return (b.fechaServicio||b.fechaSesion).localeCompare(a.fechaServicio||a.fechaSesion);});
+        tactosA.sort(function(a,b){return b.fechaSesion.localeCompare(a.fechaSesion);});
+        partosA.sort(function(a,b){return b.fechaSesion.localeCompare(a.fechaSesion);});
+        var totalEventos=serviciosA.length+tactosA.length+partosA.length;
+        // Resumen general
+        var totalPartos=partosA.length;
+        var partosVivos=partosA.filter(function(p){return p.vivo;}).length;
+        var totalTactos=tactosA.length;
+        var tactosPos=tactosA.filter(function(t){return t.resultado==="Preñada";}).length;
+        // Última actividad
+        var todos=[].concat(
+          serviciosA.map(function(s){return {fecha:s.fechaServicio||s.fechaSesion,tipo:"Servicio"};}),
+          tactosA.map(function(t){return {fecha:t.fechaSesion,tipo:"Tacto: "+(t.resultado||"")};}),
+          partosA.map(function(p){return {fecha:p.fechaSesion,tipo:"Parto"+(p.vivo?" (vivo)":" (muerto)")};})
+        );
+        todos.sort(function(a,b){return b.fecha.localeCompare(a.fecha);});
+        var ultima=todos[0];
+
+        if(totalEventos===0){
+          return(
+            <div className="flex flex-col gap-3">
+              <div className="text-center py-12 text-gray-400">
+                <p className="text-5xl mb-3">🐄</p>
+                <p className="text-sm font-bold">Sin actividad reproductiva</p>
+                <p className="text-xs mt-2 text-gray-500">Cuando agregues servicios, tactos o partos en este lote, aparecerán acá</p>
+              </div>
+            </div>
+          );
+        }
+
+        // Agrupar todos los eventos por año
+        var porAnio={};
+        serviciosA.forEach(function(s){var a=(s.fechaServicio||s.fechaSesion).substring(0,4);if(!porAnio[a])porAnio[a]={servicios:[],tactos:[],partos:[]};porAnio[a].servicios.push(s);});
+        tactosA.forEach(function(t){var a=t.fechaSesion.substring(0,4);if(!porAnio[a])porAnio[a]={servicios:[],tactos:[],partos:[]};porAnio[a].tactos.push(t);});
+        partosA.forEach(function(p){var a=p.fechaSesion.substring(0,4);if(!porAnio[a])porAnio[a]={servicios:[],tactos:[],partos:[]};porAnio[a].partos.push(p);});
+        var aniosOrd=Object.keys(porAnio).sort(function(a,b){return b.localeCompare(a);});
+
+        return(
+          <div className="flex flex-col gap-3">
+            {/* Resumen general */}
+            <div className="grid grid-cols-2 gap-2">
+              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-center">
+                <p className="text-[10px] text-emerald-600 uppercase font-bold mb-0.5">Terneros nacidos</p>
+                <p className="text-2xl font-black text-emerald-700">{totalPartos}</p>
+                {totalPartos>0&&<p className="text-[10px] text-emerald-500">{partosVivos+" vivos"}</p>}
+              </div>
+              <div className="bg-pink-50 border border-pink-200 rounded-xl p-3 text-center">
+                <p className="text-[10px] text-pink-600 uppercase font-bold mb-0.5">% Preñez</p>
+                <p className="text-2xl font-black text-pink-700">{totalTactos>0?Math.round(tactosPos/totalTactos*100)+"%":"—"}</p>
+                {totalTactos>0&&<p className="text-[10px] text-pink-500">{tactosPos+" de "+totalTactos+" tactos"}</p>}
+              </div>
+            </div>
+
+            {ultima&&(
+              <div className="bg-gray-50 border border-gray-200 rounded-xl p-2.5 text-center">
+                <p className="text-[10px] text-gray-500 uppercase font-bold">Última actividad</p>
+                <p className="text-sm font-bold text-gray-800">{ultima.tipo+" · "+fmtFecha(ultima.fecha)}</p>
+              </div>
+            )}
+
+            {/* Por año */}
+            {aniosOrd.map(function(a){
+              var grupo=porAnio[a];
+              return(
+                <div key={a} className="border border-pink-200 rounded-xl p-3 flex flex-col gap-2 bg-pink-50/30">
+                  <p className="text-pink-700 font-black text-sm">📅 {a}</p>
+
+                  {grupo.servicios.length>0&&(
+                    <div className="flex flex-col gap-1">
+                      <p className="text-[10px] text-pink-600 uppercase font-bold">💉 Servicios ({grupo.servicios.length})</p>
+                      {grupo.servicios.map(function(s,i){
+                        return(
+                          <div key={"s"+i} className="bg-white border border-pink-100 rounded-lg px-2 py-1.5 text-xs">
+                            <p className="text-gray-800"><span className="font-bold">{fmtFecha(s.fechaServicio||s.fechaSesion)}</span>{" · "+(s.tipo||"")}{s.toro&&s.toro!=="__otro"?" · "+s.toro:""}</p>
+                            {s.obs&&<p className="text-gray-500 text-[10px]">{s.obs}</p>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {grupo.tactos.length>0&&(
+                    <div className="flex flex-col gap-1">
+                      <p className="text-[10px] text-pink-600 uppercase font-bold">🔍 Tactos ({grupo.tactos.length})</p>
+                      {grupo.tactos.map(function(t,i){
+                        return(
+                          <div key={"t"+i} className="bg-white border border-pink-100 rounded-lg px-2 py-1.5 text-xs">
+                            <p className="text-gray-800"><span className="font-bold">{fmtFecha(t.fechaSesion)}</span>{" · "}<span className={t.resultado==="Preñada"?"text-emerald-700 font-bold":t.resultado==="Vacía"?"text-red-600 font-bold":"text-amber-700 font-bold"}>{t.resultado||""}</span></p>
+                            {t.fechaPartoProbable&&<p className="text-amber-700 text-[10px]">Parto est.: {fmtFecha(t.fechaPartoProbable)}</p>}
+                            {t.obs&&<p className="text-gray-500 text-[10px]">{t.obs}</p>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {grupo.partos.length>0&&(
+                    <div className="flex flex-col gap-1">
+                      <p className="text-[10px] text-pink-600 uppercase font-bold">🐄 Partos ({grupo.partos.length})</p>
+                      {grupo.partos.map(function(p,i){
+                        return(
+                          <div key={"p"+i} className="bg-white border border-pink-100 rounded-lg px-2 py-1.5 text-xs">
+                            <p className="text-gray-800"><span className="font-bold">{fmtFecha(p.fechaSesion)}</span>{" · "}<span className={p.vivo?"text-emerald-700 font-bold":"text-red-600 font-bold"}>{p.vivo?"Vivo":"Muerto"}</span>{p.sexoTernero?" · "+(p.sexoTernero==="Macho"?"♂":"♀")+" "+p.sexoTernero:""}</p>
+                            {p.caravanaTernero&&<p className="text-gray-600 text-[10px]">Ternero: {p.caravanaTernero}</p>}
+                            {p.obs&&<p className="text-gray-500 text-[10px]">{p.obs}</p>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
       {tab==="sanidad"&&(
         <div className="flex flex-col gap-3">
           <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 flex flex-col gap-2">
@@ -2855,7 +2987,7 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
           setSesionPendienteReabrir(null);
           setResumenSesion(ses);
         }
-      }} onUpdate={actualizar} onDelete={eliminar} lotes={allLotes} loteActualId={loteId} establecimientos={establecimientos} estId={estId} onMoverEst={moverEst} onVender={venderAnimal} nombreLote={lote.nombre}/>}
+      }} onUpdate={actualizar} onDelete={eliminar} lotes={allLotes} loteActualId={loteId} establecimientos={establecimientos} estId={estId} onMoverEst={moverEst} onVender={venderAnimal} nombreLote={lote.nombre} reproSesionesLote={lote.reproSesiones||[]}/>}
       {resumenSesion&&<ResumenSesionModal sesion={resumenSesion} nombreLote={lote.nombre} animales={animales} onVerAnimal={function(id){setSesionPendienteReabrir(resumenSesion);setResumenSesion(null);setDetalleId(id);}} onClose={function(){setResumenSesion(null);}}/>}
       {showHistorial&&<HistorialModal sesiones={sesiones} onClose={function(){setShowHistorial(false);}} onVerSesion={function(s){setShowHistorial(false);setResumenSesion(s);}} onEliminarSesion={function(id){setLotes(function(prev){return prev.map(function(l){return l.id===loteId?Object.assign({},l,{sesiones:l.sesiones.filter(function(s){return s.id!==id;})}):l;});});}}/>}
       {showRepro&&<ReproModal lote={lote} toros={establecimientos?(establecimientos.find(function(e){return e.id===estId;})||{}).toros||[]:lote.toros||[]} onClose={function(){setShowRepro(false);}} onUpdate={function(sesion,nuevosAnimales,deleteId){
