@@ -2379,6 +2379,7 @@ function AgroVistaLote({agro,onUpdate,loteNombre}){
   var setG=function(k,v){setFormGasto(function(p){return Object.assign({},p,{[k]:v});});};
   var [anioActi,setAnioActi]=useState("");
   var [anioGasto,setAnioGasto]=useState("");
+  var [tipoFiltro,setTipoFiltro]=useState("");
   var potreros=agro.potreros||[];
   var registros=agro.registros||[];
   var gastos=agro.gastos||[];
@@ -2471,8 +2472,21 @@ function AgroVistaLote({agro,onUpdate,loteNombre}){
                   setA("actividad","");setA("cultivo","");setA("obs","");setA("kgCosecha","");
                 }} className="w-full bg-amber-400 text-amber-900 font-bold py-2 rounded-xl text-sm border border-amber-400">Guardar</button>
               </div>
-              {registros.filter(function(r){return r.potrero===potreroActivo.nombre;}).length===0&&<p className="text-gray-400 text-sm text-center py-4">Sin actividades</p>}
-              {[...registros].filter(function(r){return r.potrero===potreroActivo.nombre;}).sort(function(a,b){return b.fecha.localeCompare(a.fecha);}).map(function(r){
+              {(function(){
+                var actsPot=registros.filter(function(r){return r.potrero===potreroActivo.nombre;});
+                if(actsPot.length===0)return null;
+                return(
+                  <div className="flex items-center gap-2">
+                    <label className="text-[10px] text-gray-500 uppercase font-bold">🌾 Tipo:</label>
+                    <select value={tipoFiltro} onChange={function(e){setTipoFiltro(e.target.value);}} className="bg-gray-50 border border-gray-200 rounded-lg px-2 py-1 text-gray-800 text-xs font-bold focus:outline-none">
+                      <option value="">Todos</option>
+                      {ACTIVIDADES_AGRO.map(function(t){return <option key={t} value={t}>{t}</option>;})}
+                    </select>
+                  </div>
+                );
+              })()}
+              {registros.filter(function(r){return r.potrero===potreroActivo.nombre&&(!tipoFiltro||r.actividad===tipoFiltro);}).length===0&&<p className="text-gray-400 text-sm text-center py-4">Sin actividades</p>}
+              {[...registros].filter(function(r){return r.potrero===potreroActivo.nombre&&(!tipoFiltro||r.actividad===tipoFiltro);}).sort(function(a,b){return b.fecha.localeCompare(a.fecha);}).map(function(r){
                 return(
                   <div key={r.id} className="bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 flex items-start justify-between">
                     <div className="flex-1">
@@ -2516,9 +2530,20 @@ function AgroVistaLote({agro,onUpdate,loteNombre}){
             setA("actividad","");setA("obs","");setA("potrero","");setA("cultivo","");
           }} className="w-full bg-amber-400 text-amber-900 font-bold py-3 rounded-xl text-sm border border-amber-400">Guardar Actividad</button>
           <div className="flex flex-col gap-2 border-t border-gray-100 pt-3">
-            {(function(){var aA=aniosDe(registros);if(aA.length<=1)return null;var fc=anioActi?registros.filter(function(r){return r.fecha&&r.fecha.substring(0,4)===anioActi;}).length:registros.length;return <FiltroAnio anios={aA} valor={anioActi} onChange={function(e){setAnioActi(e.target.value);}} total={registros.length} filtrados={fc}/>;})()}
+            <div className="flex items-center gap-2 flex-wrap">
+              {(function(){var aA=aniosDe(registros);if(aA.length<=1)return null;var fc=registros.filter(function(r){return (!anioActi||(r.fecha&&r.fecha.substring(0,4)===anioActi))&&(!tipoFiltro||r.actividad===tipoFiltro);}).length;return <FiltroAnio anios={aA} valor={anioActi} onChange={function(e){setAnioActi(e.target.value);}} total={registros.length} filtrados={fc}/>;})()}
+              {registros.length>0&&(
+                <div className="flex items-center gap-2">
+                  <label className="text-[10px] text-gray-500 uppercase font-bold">🌾 Tipo:</label>
+                  <select value={tipoFiltro} onChange={function(e){setTipoFiltro(e.target.value);}} className="bg-gray-50 border border-gray-200 rounded-lg px-2 py-1 text-gray-800 text-xs font-bold focus:outline-none">
+                    <option value="">Todos</option>
+                    {ACTIVIDADES_AGRO.map(function(t){return <option key={t} value={t}>{t}</option>;})}
+                  </select>
+                </div>
+              )}
+            </div>
             {registros.length===0&&<p className="text-gray-400 text-sm text-center py-4">Sin actividades</p>}
-            {[...registros].sort(function(a,b){return b.fecha.localeCompare(a.fecha);}).filter(function(r){return !anioActi||(r.fecha&&r.fecha.substring(0,4)===anioActi);}).map(function(r){
+            {[...registros].sort(function(a,b){return b.fecha.localeCompare(a.fecha);}).filter(function(r){return (!anioActi||(r.fecha&&r.fecha.substring(0,4)===anioActi))&&(!tipoFiltro||r.actividad===tipoFiltro);}).map(function(r){
               return(
                 <div key={r.id} className="bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 flex items-start justify-between">
                   <div className="flex-1">
