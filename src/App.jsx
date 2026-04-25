@@ -114,6 +114,31 @@ function sumarDias(fecha,dias){
   d.setDate(d.getDate()+dias);
   return d.toISOString().split("T")[0];
 }
+
+// Extrae años únicos de una lista de items con fecha (campo configurable)
+function aniosDe(items,getFecha){
+  var anios={};
+  items.forEach(function(it){
+    var f=getFecha?getFecha(it):it.fecha;
+    if(f){var a=f.substring(0,4);anios[a]=true;}
+  });
+  return Object.keys(anios).sort(function(a,b){return b.localeCompare(a);});
+}
+
+// Componente filtro de año reutilizable
+function FiltroAnio({anios,valor,onChange,total,filtrados}){
+  if(anios.length===0)return null;
+  return(
+    <div className="flex items-center gap-2 flex-wrap">
+      <label className="text-[10px] text-gray-500 uppercase font-bold">📅 Año:</label>
+      <select value={valor} onChange={onChange} className="bg-gray-50 border border-gray-200 rounded-lg px-2 py-1 text-gray-800 text-xs font-bold focus:outline-none">
+        <option value="">Todos</option>
+        {anios.map(function(a){return <option key={a} value={a}>{a}</option>;})}
+      </select>
+      {valor&&<span className="text-[10px] text-gray-500">{filtrados+" de "+total}</span>}
+    </div>
+  );
+}
 function estadoAlerta(fechaHora,pasada){
   if(pasada)return "pasada";
   var diff=new Date(fechaHora)-new Date();
@@ -1055,7 +1080,10 @@ function HistorialModal({sesiones,onClose,onVerSesion,onEliminarSesion}){
   var [modoComparar,setModoComparar]=useState(false);
   var [sel,setSel]=useState([]); // array de ids
   var [comparar,setComparar]=useState(null); // {a, b}
+  var [anioFiltro,setAnioFiltro]=useState("");
   var sorted=[...sesiones].sort(function(a,b){return b.fecha.localeCompare(a.fecha);});
+  var aniosDisp=aniosDe(sesiones);
+  var filtradasPorAnio=anioFiltro?sorted.filter(function(s){return s.fecha&&s.fecha.substring(0,4)===anioFiltro;}):sorted;
 
   function toggleSel(id){
     setSel(function(prev){
@@ -1178,8 +1206,10 @@ function HistorialModal({sesiones,onClose,onVerSesion,onEliminarSesion}){
         )}
         {modoComparar&&sel.length>0&&sel.length<2&&<p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">Seleccioná {2-sel.length} sesión más</p>}
 
-        {sorted.length===0&&<p className="text-gray-400 text-center py-8">Sin sesiones guardadas</p>}
-        {sorted.map(function(s){
+        {aniosDisp.length>1&&<FiltroAnio anios={aniosDisp} valor={anioFiltro} onChange={function(e){setAnioFiltro(e.target.value);}} total={sorted.length} filtrados={filtradasPorAnio.length}/>}
+
+        {filtradasPorAnio.length===0&&<p className="text-gray-400 text-center py-8">{anioFiltro?"Sin sesiones en "+anioFiltro:"Sin sesiones guardadas"}</p>}
+        {filtradasPorAnio.map(function(s){
           var totalKg=s.registros.reduce(function(acc,r){return acc+r.peso;},0);
           var selected=sel.includes(s.id);
           return(
@@ -1221,6 +1251,7 @@ function ReproModal({lote,onClose,onUpdate,toros}){
   var busqRef=useRef();
   var [ask,confirmDialog]=useConfirm();
   var [exportRepro,setExportRepro]=useState(null);
+  var [anioRepro,setAnioRepro]=useState("");
 
   function setF(k,v){setForm(function(p){return Object.assign({},p,{[k]:v});});}
 
@@ -1345,7 +1376,13 @@ function ReproModal({lote,onClose,onUpdate,toros}){
           {sesiones.length>0&&(
             <div className="flex flex-col gap-2 border-t border-pink-200 pt-3">
               <p className="text-xs font-black text-pink-600 uppercase">Historial</p>
-              {[...sesiones].sort(function(a,b){return b.fecha.localeCompare(a.fecha);}).map(function(s){
+              {(function(){
+                var aniosR=aniosDe(sesiones);
+                if(aniosR.length<=1)return null;
+                var filtCount=anioRepro?sesiones.filter(function(s){return s.fecha&&s.fecha.substring(0,4)===anioRepro;}).length:sesiones.length;
+                return <FiltroAnio anios={aniosR} valor={anioRepro} onChange={function(e){setAnioRepro(e.target.value);}} total={sesiones.length} filtrados={filtCount}/>;
+              })()}
+              {[...sesiones].sort(function(a,b){return b.fecha.localeCompare(a.fecha);}).filter(function(s){return !anioRepro||(s.fecha&&s.fecha.substring(0,4)===anioRepro);}).map(function(s){
                 return(
                   <button key={s.id} onClick={function(){setSesionActual(Object.assign({},s,{soloVer:true}));setLog(s.registros);setModo("resumen");}}
                     className="w-full text-left bg-pink-50 border border-pink-200 rounded-xl px-4 py-3 flex items-center justify-between">
@@ -1777,16 +1814,22 @@ function VenderAnimalModal({animal,loteNombre,onClose,onVender}){
 function VendidosModal({est,onClose,onEliminar}){
   var [ask,confirmDialog]=useConfirm();
   var [busq,setBusq]=useState("");
+  var [anioFiltro,setAnioFiltro]=useState("");
   var [detalle,setDetalle]=useState(null);
   var vendidos=est.vendidos||[];
   var vendidosOrdenados=[...vendidos].sort(function(a,b){return (b.venta.fecha||"").localeCompare(a.venta.fecha||"");});
+  var aniosDisp=aniosDe(vendidos,function(v){return v.venta.fecha;});
   var filtrados=vendidosOrdenados.filter(function(v){
+    if(anioFiltro&&(!v.venta.fecha||v.venta.fecha.substring(0,4)!==anioFiltro))return false;
     var q=busq.trim().toUpperCase();
     if(!q)return true;
     return v.caravana.toUpperCase().indexOf(q)>=0||(v.venta.comprador||"").toUpperCase().indexOf(q)>=0;
   });
-  var totalGanado=vendidos.reduce(function(s,v){return s+(v.venta.precioTotal||0);},0);
-  var totalAnimales=vendidos.length;
+  // Total facturado: respeta el filtro de año
+  var vendidosParaTotal=anioFiltro?vendidos.filter(function(v){return v.venta.fecha&&v.venta.fecha.substring(0,4)===anioFiltro;}):vendidos;
+  var totalGanado=vendidosParaTotal.reduce(function(s,v){return s+(v.venta.precioTotal||0);},0);
+  var totalAnimales=vendidosParaTotal.length;
+  var totalAnimGral=vendidos.length;
 
   if(detalle){
     var a=detalle;
@@ -1893,22 +1936,26 @@ function VendidosModal({est,onClose,onEliminar}){
   }
 
   return(
-    <Modal title={"💰 Vendidos"+(totalAnimales>0?" ("+totalAnimales+")":"")} onClose={onClose}>
+    <Modal title={"💰 Vendidos"+(totalAnimGral>0?" ("+totalAnimGral+")":"")} onClose={onClose}>
       <div className="flex flex-col gap-3">
-        {totalAnimales>0&&(
+        {totalAnimGral>0&&(
           <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-center">
-            <p className="text-xs text-emerald-700 uppercase font-bold">Total facturado</p>
+            <p className="text-xs text-emerald-700 uppercase font-bold">{"Total facturado"+(anioFiltro?" "+anioFiltro:"")}</p>
             <p className="text-2xl font-black text-emerald-800">{"$"+totalGanado.toLocaleString("es-AR")}</p>
             <p className="text-xs text-emerald-600">{totalAnimales+" animal"+(totalAnimales>1?"es":"")+" vendido"+(totalAnimales>1?"s":"")}</p>
           </div>
         )}
 
-        {totalAnimales>0&&(
+        {totalAnimGral>0&&aniosDisp.length>0&&(
+          <FiltroAnio anios={aniosDisp} valor={anioFiltro} onChange={function(e){setAnioFiltro(e.target.value);}} total={totalAnimGral} filtrados={totalAnimales}/>
+        )}
+
+        {totalAnimGral>0&&(
           <input value={busq} onChange={function(e){setBusq(e.target.value);}} placeholder="🔍 Buscar caravana o comprador..."
             style={{background:"#f9fafb"}} className="border border-gray-200 rounded-xl px-3 py-2.5 text-gray-900 text-sm focus:outline-none w-full"/>
         )}
 
-        {totalAnimales===0&&<div className="text-center py-12 text-gray-400"><p className="text-5xl mb-3">💰</p><p className="text-sm">Sin ventas registradas</p><p className="text-xs mt-2 text-gray-500">Marcá animales como vendidos desde su ficha</p></div>}
+        {totalAnimGral===0&&<div className="text-center py-12 text-gray-400"><p className="text-5xl mb-3">💰</p><p className="text-sm">Sin ventas registradas</p><p className="text-xs mt-2 text-gray-500">Marcá animales como vendidos desde su ficha</p></div>}
 
         {filtrados.map(function(v){
           return(
@@ -2083,6 +2130,8 @@ function AgroVistaLote({agro,onUpdate,loteNombre}){
   var setPot=function(k,v){setFormPot(function(p){return Object.assign({},p,{[k]:v});});};
   var setA=function(k,v){setFormAct(function(p){return Object.assign({},p,{[k]:v});});};
   var setG=function(k,v){setFormGasto(function(p){return Object.assign({},p,{[k]:v});});};
+  var [anioActi,setAnioActi]=useState("");
+  var [anioGasto,setAnioGasto]=useState("");
   var potreros=agro.potreros||[];
   var registros=agro.registros||[];
   var gastos=agro.gastos||[];
@@ -2220,8 +2269,9 @@ function AgroVistaLote({agro,onUpdate,loteNombre}){
             setA("actividad","");setA("obs","");setA("potrero","");setA("cultivo","");
           }} className="w-full bg-amber-400 text-amber-900 font-bold py-3 rounded-xl text-sm border border-amber-400">Guardar Actividad</button>
           <div className="flex flex-col gap-2 border-t border-gray-100 pt-3">
+            {(function(){var aA=aniosDe(registros);if(aA.length<=1)return null;var fc=anioActi?registros.filter(function(r){return r.fecha&&r.fecha.substring(0,4)===anioActi;}).length:registros.length;return <FiltroAnio anios={aA} valor={anioActi} onChange={function(e){setAnioActi(e.target.value);}} total={registros.length} filtrados={fc}/>;})()}
             {registros.length===0&&<p className="text-gray-400 text-sm text-center py-4">Sin actividades</p>}
-            {[...registros].sort(function(a,b){return b.fecha.localeCompare(a.fecha);}).map(function(r){
+            {[...registros].sort(function(a,b){return b.fecha.localeCompare(a.fecha);}).filter(function(r){return !anioActi||(r.fecha&&r.fecha.substring(0,4)===anioActi);}).map(function(r){
               return(
                 <div key={r.id} className="bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 flex items-start justify-between">
                   <div className="flex-1">
@@ -2243,10 +2293,16 @@ function AgroVistaLote({agro,onUpdate,loteNombre}){
 
       {tab==="gastos"&&(
         <div className="flex flex-col gap-3">
-          <div style={{background:"#fffbeb"}} className=" border border-amber-200 rounded-xl p-3 text-center">
-            <p className="text-[10px] text-amber-600 uppercase font-bold">Total gastos</p>
-            <p className="text-2xl font-black text-amber-700">{"$"+gastos.reduce(function(s,g){return s+g.monto;},0).toLocaleString("es-AR")}</p>
-          </div>
+          {(function(){
+            var gFilt=anioGasto?gastos.filter(function(g){return g.fecha&&g.fecha.substring(0,4)===anioGasto;}):gastos;
+            var totalFilt=gFilt.reduce(function(s,g){return s+g.monto;},0);
+            return(
+              <div style={{background:"#fffbeb"}} className=" border border-amber-200 rounded-xl p-3 text-center">
+                <p className="text-[10px] text-amber-600 uppercase font-bold">{"Total gastos"+(anioGasto?" "+anioGasto:"")}</p>
+                <p className="text-2xl font-black text-amber-700">{"$"+totalFilt.toLocaleString("es-AR")}</p>
+              </div>
+            );
+          })()}
           <Inp label="Concepto" placeholder="Ej: Herbicida, Gasoil..." value={formGasto.concepto} onChange={function(e){setG("concepto",e.target.value);}}/>
           <div className="grid grid-cols-2 gap-3">
             <Inp label="Monto ($)" type="number" placeholder="0" value={formGasto.monto} onChange={function(e){setG("monto",e.target.value);}}/>
@@ -2265,8 +2321,9 @@ function AgroVistaLote({agro,onUpdate,loteNombre}){
             setFormGasto({fecha:hoy(),concepto:"",monto:"",potrero:""});
           }} className="w-full bg-amber-400 text-amber-900 font-bold py-3 rounded-xl text-sm border border-amber-400">Guardar Gasto</button>
           <div className="flex flex-col gap-2 border-t border-gray-100 pt-3">
+            {(function(){var aG=aniosDe(gastos);if(aG.length<=1)return null;var fc=anioGasto?gastos.filter(function(g){return g.fecha&&g.fecha.substring(0,4)===anioGasto;}).length:gastos.length;return <FiltroAnio anios={aG} valor={anioGasto} onChange={function(e){setAnioGasto(e.target.value);}} total={gastos.length} filtrados={fc}/>;})()}
             {gastos.length===0&&<p className="text-gray-400 text-sm text-center py-4">Sin gastos</p>}
-            {[...gastos].sort(function(a,b){return b.fecha.localeCompare(a.fecha);}).map(function(g){
+            {[...gastos].sort(function(a,b){return b.fecha.localeCompare(a.fecha);}).filter(function(g){return !anioGasto||(g.fecha&&g.fecha.substring(0,4)===anioGasto);}).map(function(g){
               return(
                 <div key={g.id} className="bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 flex items-center justify-between">
                   <div>
