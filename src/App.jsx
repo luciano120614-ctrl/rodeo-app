@@ -2245,9 +2245,10 @@ function TorosModal({est,onClose,onUpdate}){
   var [form,setForm]=useState({caravana:"",raza:"",fechaNac:"",propietario:"",cabana:"",fechaCompra:"",precioCompra:"",pesoActual:"",obs:""});
   var [editandoId,setEditandoId]=useState(null);
   var [verToro,setVerToro]=useState(null);
+  var [showForm,setShowForm]=useState(false);
   var toros=est.toros||[];
   function setF(k,v){setForm(function(p){return Object.assign({},p,{[k]:v});});}
-  function reset(){setForm({caravana:"",raza:"",fechaNac:"",propietario:"",cabana:"",fechaCompra:"",precioCompra:"",pesoActual:"",obs:""});setEditandoId(null);}
+  function reset(){setForm({caravana:"",raza:"",fechaNac:"",propietario:"",cabana:"",fechaCompra:"",precioCompra:"",pesoActual:"",obs:""});setEditandoId(null);setShowForm(false);}
   function guardar(){
     if(!form.caravana.trim())return;
     var datos={
@@ -2282,6 +2283,7 @@ function TorosModal({est,onClose,onUpdate}){
     });
     setEditandoId(t.id);
     setVerToro(null);
+    setShowForm(true);
   }
 
   // Vista detalle de un toro
@@ -2327,11 +2329,12 @@ function TorosModal({est,onClose,onUpdate}){
     );
   }
 
-  return(
-    <Modal title="🐂 Toros" onClose={function(){if(editandoId)reset();onClose();}}>
-      <div className="flex flex-col gap-3">
-        <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 flex flex-col gap-2">
-          <p className="text-xs font-black text-green-600 uppercase">{editandoId?"✏️ Editar toro":"+ Nuevo toro"}</p>
+  // Vista formulario (agregar o editar)
+  if(showForm){
+    return(
+      <Modal title={editandoId?"✏️ Editar toro":"+ Agregar toro"} onClose={reset}>
+        <div className="flex flex-col gap-3">
+          <button onClick={reset} className="text-gray-700 text-sm font-bold text-left">← Volver a la lista</button>
           <Inp label="Caravana *" placeholder="N° caravana" value={form.caravana} onChange={function(e){setF("caravana",e.target.value);}}/>
           <div className="grid grid-cols-2 gap-2">
             <Sel label="Raza" options={RAZAS} value={form.raza} onChange={function(e){setF("raza",e.target.value);}}/>
@@ -2351,11 +2354,21 @@ function TorosModal({est,onClose,onUpdate}){
             <textarea rows={2} value={form.obs} onChange={function(e){setF("obs",e.target.value);}} placeholder="Características, problemas, etc..."
               className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-gray-800 text-sm focus:outline-none focus:border-green-400 resize-none"/>
           </div>
-          <div className="flex gap-2">
-            {editandoId&&<button onClick={reset} className="flex-1 py-2.5 rounded-xl border border-gray-200 text-gray-700 text-sm font-bold">Cancelar</button>}
+          <div className="flex gap-2 pt-1">
+            <button onClick={reset} className="flex-1 py-2.5 rounded-xl border border-gray-200 text-gray-700 text-sm font-bold">Cancelar</button>
             <button onClick={guardar} style={{boxShadow:"0 1px 2px rgba(0,0,0,0.1)"}} className="flex-1 bg-emerald-300 text-white font-black py-2.5 rounded-xl text-sm border border-emerald-300">{editandoId?"Guardar cambios":"Guardar Toro"}</button>
           </div>
         </div>
+      </Modal>
+    );
+  }
+
+  // Vista lista (por defecto)
+  return(
+    <Modal title={"🐂 Toros"+(toros.length>0?" ("+toros.length+")":"")} onClose={onClose}>
+      <div className="flex flex-col gap-3">
+        <button onClick={function(){setShowForm(true);}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08)"}} className="w-full bg-emerald-300 text-white font-black py-3 rounded-xl text-sm border border-emerald-300">+ Agregar toro</button>
+
         {toros.length===0&&(
           <div className="text-center py-8">
             <p className="text-5xl mb-2">🐂</p>
