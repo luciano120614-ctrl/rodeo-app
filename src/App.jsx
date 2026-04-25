@@ -288,6 +288,75 @@ function Sel({label,options,value,onChange}){
     </div>
   );
 }
+
+// Selector de fecha con 3 dropdowns (Día / Mes / Año) - útil para fechas viejas
+function FechaSelector({label,value,onChange,minAnio}){
+  // value es "YYYY-MM-DD" o ""
+  var partes=value?value.split("-"):["","",""];
+  var anio=partes[0]||"";
+  var mes=partes[1]||"";
+  var dia=partes[2]||"";
+
+  var anioActual=new Date().getFullYear();
+  var anioMin=minAnio||(anioActual-30);
+  var anios=[];
+  for(var y=anioActual;y>=anioMin;y--)anios.push(String(y));
+
+  var meses=[
+    {n:"01",l:"Enero"},{n:"02",l:"Febrero"},{n:"03",l:"Marzo"},{n:"04",l:"Abril"},
+    {n:"05",l:"Mayo"},{n:"06",l:"Junio"},{n:"07",l:"Julio"},{n:"08",l:"Agosto"},
+    {n:"09",l:"Septiembre"},{n:"10",l:"Octubre"},{n:"11",l:"Noviembre"},{n:"12",l:"Diciembre"}
+  ];
+
+  // Días según mes y año
+  var diasEnMes=31;
+  if(mes&&anio){
+    var m=parseInt(mes),a=parseInt(anio);
+    if([4,6,9,11].indexOf(m)>=0)diasEnMes=30;
+    else if(m===2)diasEnMes=(a%4===0&&a%100!==0)||a%400===0?29:28;
+  }
+  var dias=[];
+  for(var d=1;d<=diasEnMes;d++)dias.push(d<10?"0"+d:String(d));
+
+  function actualizar(nuevoAnio,nuevoMes,nuevoDia){
+    if(nuevoAnio&&nuevoMes&&nuevoDia){
+      // Ajustar día si es mayor al máximo del mes nuevo
+      var maxDias=31;
+      var mNum=parseInt(nuevoMes),aNum=parseInt(nuevoAnio);
+      if([4,6,9,11].indexOf(mNum)>=0)maxDias=30;
+      else if(mNum===2)maxDias=(aNum%4===0&&aNum%100!==0)||aNum%400===0?29:28;
+      var diaFinal=parseInt(nuevoDia)>maxDias?(maxDias<10?"0"+maxDias:String(maxDias)):nuevoDia;
+      onChange(nuevoAnio+"-"+nuevoMes+"-"+diaFinal);
+    }else if(!nuevoAnio&&!nuevoMes&&!nuevoDia){
+      onChange("");
+    }else{
+      // Estado parcial - guardamos lo que haya hasta que esté completo
+      var partial=(nuevoAnio||"YYYY")+"-"+(nuevoMes||"MM")+"-"+(nuevoDia||"DD");
+      // Solo emitir si está completo
+      if(nuevoAnio&&nuevoMes&&nuevoDia)onChange(partial);
+    }
+  }
+
+  return(
+    <div className="flex flex-col gap-1">
+      {label&&<label className="text-[10px] text-green-600 font-bold uppercase tracking-wider">{label}</label>}
+      <div className="grid grid-cols-3 gap-1.5">
+        <select value={dia} onChange={function(e){actualizar(anio,mes,e.target.value);}} className="bg-gray-50 border border-gray-200 rounded-xl px-2 py-2.5 text-gray-800 text-sm focus:outline-none focus:border-green-400">
+          <option value="">Día</option>
+          {dias.map(function(d){return <option key={d} value={d}>{parseInt(d)}</option>;})}
+        </select>
+        <select value={mes} onChange={function(e){actualizar(anio,e.target.value,dia);}} className="bg-gray-50 border border-gray-200 rounded-xl px-2 py-2.5 text-gray-800 text-sm focus:outline-none focus:border-green-400">
+          <option value="">Mes</option>
+          {meses.map(function(m){return <option key={m.n} value={m.n}>{m.l}</option>;})}
+        </select>
+        <select value={anio} onChange={function(e){actualizar(e.target.value,mes,dia);}} className="bg-gray-50 border border-gray-200 rounded-xl px-2 py-2.5 text-gray-800 text-sm focus:outline-none focus:border-green-400">
+          <option value="">Año</option>
+          {anios.map(function(a){return <option key={a} value={a}>{a}</option>;})}
+        </select>
+      </div>
+    </div>
+  );
+}
 function Modal({title,onClose,children}){
   return(
     <div className="fixed inset-0 z-50 flex items-end justify-center" style={{background:"rgba(0,0,0,0.5)"}}>
@@ -400,7 +469,7 @@ function NuevoAnimalModal({onClose,onSave,caravanaInicial}){
           <Sel label="Categoría *" options={CATEGORIAS} value={f.categoria} onChange={function(e){set("categoria",e.target.value);}}/>
         </div>
         <Sel label="Raza" options={RAZAS} value={f.raza} onChange={function(e){set("raza",e.target.value);}}/>
-        <Inp label="Fecha de nac. (opcional)" type="date" value={f.fechaNac} onChange={function(e){set("fechaNac",e.target.value);}}/>
+        <FechaSelector label="Fecha de nac. (opcional)" value={f.fechaNac} onChange={function(v){set("fechaNac",v);}} minAnio={new Date().getFullYear()-25}/>
         <div className="grid grid-cols-2 gap-3">
           <Inp label="Peso inicial (kg)" type="number" value={f.peso} onChange={function(e){set("peso",e.target.value);}} placeholder="0"/>
           <Inp label="Fecha peso" type="date" value={f.fecha} onChange={function(e){set("fecha",e.target.value);}}/>
@@ -1980,7 +2049,7 @@ function EditarAnimalModal({animal,onClose,onGuardar}){
           <Sel label="Categoría *" options={CATEGORIAS} value={f.categoria} onChange={function(e){set("categoria",e.target.value);}}/>
         </div>
         <Sel label="Raza" options={RAZAS} value={f.raza} onChange={function(e){set("raza",e.target.value);}}/>
-        <Inp label="Fecha de nacimiento" type="date" value={f.fechaNac} onChange={function(e){set("fechaNac",e.target.value);}}/>
+        <FechaSelector label="Fecha de nacimiento" value={f.fechaNac} onChange={function(v){set("fechaNac",v);}} minAnio={new Date().getFullYear()-25}/>
         <div className="flex flex-col gap-1">
           <label className="text-[10px] text-green-600 font-bold uppercase">Observaciones</label>
           <textarea rows={2} value={f.obs} onChange={function(e){set("obs",e.target.value);}}
@@ -2336,10 +2405,8 @@ function TorosModal({est,onClose,onUpdate}){
         <div className="flex flex-col gap-3">
           <button onClick={reset} className="text-gray-700 text-sm font-bold text-left">← Volver a la lista</button>
           <Inp label="Caravana *" placeholder="N° caravana" value={form.caravana} onChange={function(e){setF("caravana",e.target.value);}}/>
-          <div className="grid grid-cols-2 gap-2">
-            <Sel label="Raza" options={RAZAS} value={form.raza} onChange={function(e){setF("raza",e.target.value);}}/>
-            <Inp label="Fecha nacimiento" type="date" value={form.fechaNac} onChange={function(e){setF("fechaNac",e.target.value);}}/>
-          </div>
+          <Sel label="Raza" options={RAZAS} value={form.raza} onChange={function(e){setF("raza",e.target.value);}}/>
+          <FechaSelector label="Fecha nacimiento" value={form.fechaNac} onChange={function(v){setF("fechaNac",v);}} minAnio={new Date().getFullYear()-25}/>
           <div className="grid grid-cols-2 gap-2">
             <Inp label="Cabaña/Línea" placeholder="Opcional" value={form.cabana} onChange={function(e){setF("cabana",e.target.value);}}/>
             <Inp label="Propietario" placeholder="Opcional" value={form.propietario} onChange={function(e){setF("propietario",e.target.value);}}/>
