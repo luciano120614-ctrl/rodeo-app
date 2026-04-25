@@ -1288,6 +1288,37 @@ function HistorialModal({sesiones,onClose,onVerSesion,onEliminarSesion}){
   var [sel,setSel]=useState([]); // array de ids
   var [comparar,setComparar]=useState(null); // {a, b}
   var [anioFiltro,setAnioFiltro]=useState("");
+  var [showPeriodo,setShowPeriodo]=useState(false);
+  var [pDesde,setPDesde]=useState("");
+  var [pHasta,setPHasta]=useState("");
+  var [resPeriodo,setResPeriodo]=useState(null);
+
+  function calcPeriodo(){
+    if(!pDesde||!pHasta){alert("Completá las dos fechas");return;}
+    if(pDesde>pHasta){alert("La fecha 'desde' debe ser anterior a 'hasta'");return;}
+    var sesEn=sesiones.filter(function(s){return s.fecha>=pDesde&&s.fecha<=pHasta;});
+    if(sesEn.length<2){alert("Se necesitan al menos 2 sesiones en el período");return;}
+    sesEn.sort(function(a,b){return a.fecha.localeCompare(b.fecha);});
+    var prim=sesEn[0],ult=sesEn[sesEn.length-1];
+    // Para cada animal en común, ver kg ganados
+    var en={},mapU={};
+    prim.registros.forEach(function(r){en[r.caravana]=r.peso;});
+    ult.registros.forEach(function(r){mapU[r.caravana]=r.peso;});
+    var kgs=[],comunes=0;
+    Object.keys(en).forEach(function(c){
+      if(mapU[c]!==undefined){
+        comunes++;
+        kgs.push(mapU[c]-en[c]);
+      }
+    });
+    if(comunes===0){alert("No hay animales en común entre las sesiones del período");return;}
+    var totalKg=kgs.reduce(function(s,v){return s+v;},0);
+    var prom=totalKg/comunes;
+    var dias=Math.round((new Date(ult.fecha)-new Date(prim.fecha))/86400000);
+    var gdpProm=dias>0?(prom/dias).toFixed(3):null;
+    setResPeriodo({totalKg:totalKg,comunes:comunes,prom:prom,dias:dias,gdpProm:gdpProm,sesiones:sesEn.length,desde:prim.fecha,hasta:ult.fecha});
+  }
+
   var sorted=[...sesiones].sort(function(a,b){return b.fecha.localeCompare(a.fecha);});
   var aniosDisp=aniosDe(sesiones);
   var filtradasPorAnio=anioFiltro?sorted.filter(function(s){return s.fecha&&s.fecha.substring(0,4)===anioFiltro;}):sorted;
@@ -1412,6 +1443,55 @@ function HistorialModal({sesiones,onClose,onVerSesion,onEliminarSesion}){
           </div>
         )}
         {modoComparar&&sel.length>0&&sel.length<2&&<p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">Seleccioná {2-sel.length} sesión más</p>}
+
+        {sesiones.length>=2&&!modoComparar&&(
+          <button onClick={function(){setShowPeriodo(function(v){return !v;});setResPeriodo(null);}} className={"w-full py-2 rounded-xl text-sm font-bold border "+(showPeriodo?"bg-emerald-100 border-emerald-300 text-emerald-800":"bg-white border-gray-200 text-gray-700")}>
+            {showPeriodo?"✕ Cerrar período":"📊 Ganancia entre fechas"}
+          </button>
+        )}
+
+        {showPeriodo&&(
+          <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 flex flex-col gap-2">
+            <p className="text-xs font-black text-emerald-700 uppercase">📊 Calcular kg ganados en un período</p>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] text-emerald-600 font-bold uppercase">Desde</label>
+                <input type="date" value={pDesde} onChange={function(e){setPDesde(e.target.value);}} className="bg-white border border-emerald-200 rounded-xl px-2 py-2 text-gray-800 text-sm focus:outline-none"/>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] text-emerald-600 font-bold uppercase">Hasta</label>
+                <input type="date" value={pHasta} onChange={function(e){setPHasta(e.target.value);}} className="bg-white border border-emerald-200 rounded-xl px-2 py-2 text-gray-800 text-sm focus:outline-none"/>
+              </div>
+            </div>
+            <button onClick={calcPeriodo} className="w-full bg-emerald-300 text-white font-bold py-2 rounded-xl text-sm border border-emerald-300">Calcular</button>
+            {resPeriodo&&(
+              <div className="bg-white border border-emerald-200 rounded-xl p-3 flex flex-col gap-1.5">
+                <p className="text-[10px] text-emerald-600 uppercase font-bold">Resultado · {fmtFecha(resPeriodo.desde)} → {fmtFecha(resPeriodo.hasta)}</p>
+                <div className="grid grid-cols-2 gap-2 mt-1">
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-2 text-center">
+                    <p className="text-xl font-black text-emerald-700">{"+"+Math.round(resPeriodo.totalKg).toLocaleString("es-AR")}</p>
+                    <p className="text-[9px] text-emerald-600 uppercase">Kg totales</p>
+                  </div>
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-2 text-center">
+                    <p className="text-xl font-black text-emerald-700">{"+"+resPeriodo.prom.toFixed(1)}</p>
+                    <p className="text-[9px] text-emerald-600 uppercase">Kg/animal</p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="bg-gray-50 border border-gray-200 rounded-lg p-2 text-center">
+                    <p className="text-base font-black text-gray-800">{resPeriodo.comunes}</p>
+                    <p className="text-[9px] text-gray-500 uppercase">Animales</p>
+                  </div>
+                  <div className="bg-gray-50 border border-gray-200 rounded-lg p-2 text-center">
+                    <p className="text-base font-black text-gray-800">{resPeriodo.gdpProm?resPeriodo.gdpProm:"—"}</p>
+                    <p className="text-[9px] text-gray-500 uppercase">GDP kg/d</p>
+                  </div>
+                </div>
+                <p className="text-[10px] text-gray-500 text-center">{resPeriodo.dias+" días · "+resPeriodo.sesiones+" sesiones en el período"}</p>
+              </div>
+            )}
+          </div>
+        )}
 
         {aniosDisp.length>1&&<FiltroAnio anios={aniosDisp} valor={anioFiltro} onChange={function(e){setAnioFiltro(e.target.value);}} total={sorted.length} filtrados={filtradasPorAnio.length}/>}
 
@@ -2983,6 +3063,14 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
   var detalleAnimal=detalleId?animales.find(function(a){return a.id===detalleId;}):null;
   var gdpVals=animales.map(function(a){return gdpTotal(a.pesajes);}).filter(function(v){return v!==null;}).map(Number);
   var gdpProm=gdpVals.length>0?(gdpVals.reduce(function(s,v){return s+v;},0)/gdpVals.length).toFixed(3):null;
+  // Kg ganados total del lote: para cada animal (último peso - primer peso). Solo cuenta si tiene 2+ pesajes
+  var kgGanadosLote=animales.reduce(function(suma,a){
+    if(!a.pesajes||a.pesajes.length<2)return suma;
+    var ord=[...a.pesajes].sort(function(x,y){return new Date(x.fecha)-new Date(y.fecha);});
+    var dif=ord[ord.length-1].peso-ord[0].peso;
+    return suma+(dif>0?dif:0);
+  },0);
+  var animalesConProgreso=animales.filter(function(a){return a.pesajes&&a.pesajes.length>=2;}).length;
   var totalMachos=animales.filter(function(a){return a.sexo==="Macho";}).length;
   var totalHembras=animales.filter(function(a){return a.sexo==="Hembra";}).length;
   var hayFiltros=!!(filtroCateg||filtroSexo||filtroPesoMin||filtroPesoMax||filtroMarca);
@@ -3101,6 +3189,9 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
             <h1 className="text-3xl font-black tracking-tight" style={{color:"#1a4a10"}}>{tipoIcon+" "+lote.nombre}</h1>
             {!esAgro&&<span className="text-sm font-bold text-emerald-600 bg-emerald-100 border border-emerald-200 px-2 py-1 rounded-full">{animales.length+" 🐄"}</span>}
           </div>
+          {!esAgro&&kgGanadosLote>0&&(
+            <p className="text-center text-xs text-gray-500 -mt-0.5 mb-1">📈 +{kgGanadosLote.toLocaleString("es-AR")} kg ganados {animalesConProgreso<animales.length?"("+animalesConProgreso+" animales)":""}{gdpProm?" · GDP "+gdpProm+" kg/d":""}</p>
+          )}
           <div className="flex items-center justify-between mt-1">
             <button onClick={onBack} className="btn-flash bg-gray-100 text-gray-800 text-2xl font-bold w-11 h-11 rounded-full flex items-center justify-center border border-gray-200">&larr;</button>
             {!esAgro&&(
