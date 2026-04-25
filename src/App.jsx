@@ -291,11 +291,17 @@ function Sel({label,options,value,onChange}){
 
 // Selector de fecha con 3 dropdowns (Día / Mes / Año) - útil para fechas viejas
 function FechaSelector({label,value,onChange,minAnio}){
-  // value es "YYYY-MM-DD" o ""
-  var partes=value?value.split("-"):["","",""];
-  var anio=partes[0]||"";
-  var mes=partes[1]||"";
-  var dia=partes[2]||"";
+  // Estado interno para los valores parciales mientras el usuario los elige
+  var [parts,setParts]=useState(function(){
+    var p=value?value.split("-"):["","",""];
+    return {anio:p[0]||"",mes:p[1]||"",dia:p[2]||""};
+  });
+
+  // Sincronizar si value cambia desde afuera
+  useEffect(function(){
+    var p=value?value.split("-"):["","",""];
+    setParts({anio:p[0]||"",mes:p[1]||"",dia:p[2]||""});
+  },[value]);
 
   var anioActual=new Date().getFullYear();
   var anioMin=minAnio||(anioActual-30);
@@ -308,32 +314,29 @@ function FechaSelector({label,value,onChange,minAnio}){
     {n:"09",l:"Septiembre"},{n:"10",l:"Octubre"},{n:"11",l:"Noviembre"},{n:"12",l:"Diciembre"}
   ];
 
-  // Días según mes y año
+  // Días según mes y año seleccionados
   var diasEnMes=31;
-  if(mes&&anio){
-    var m=parseInt(mes),a=parseInt(anio);
+  if(parts.mes&&parts.anio){
+    var m=parseInt(parts.mes),a=parseInt(parts.anio);
     if([4,6,9,11].indexOf(m)>=0)diasEnMes=30;
     else if(m===2)diasEnMes=(a%4===0&&a%100!==0)||a%400===0?29:28;
   }
   var dias=[];
   for(var d=1;d<=diasEnMes;d++)dias.push(d<10?"0"+d:String(d));
 
-  function actualizar(nuevoAnio,nuevoMes,nuevoDia){
-    if(nuevoAnio&&nuevoMes&&nuevoDia){
-      // Ajustar día si es mayor al máximo del mes nuevo
+  function actualizar(nuevasParts){
+    setParts(nuevasParts);
+    // Solo emitir el onChange cuando los 3 valores estén completos
+    if(nuevasParts.anio&&nuevasParts.mes&&nuevasParts.dia){
+      // Ajustar día si es mayor al máximo del mes
       var maxDias=31;
-      var mNum=parseInt(nuevoMes),aNum=parseInt(nuevoAnio);
+      var mNum=parseInt(nuevasParts.mes),aNum=parseInt(nuevasParts.anio);
       if([4,6,9,11].indexOf(mNum)>=0)maxDias=30;
       else if(mNum===2)maxDias=(aNum%4===0&&aNum%100!==0)||aNum%400===0?29:28;
-      var diaFinal=parseInt(nuevoDia)>maxDias?(maxDias<10?"0"+maxDias:String(maxDias)):nuevoDia;
-      onChange(nuevoAnio+"-"+nuevoMes+"-"+diaFinal);
-    }else if(!nuevoAnio&&!nuevoMes&&!nuevoDia){
+      var diaFinal=parseInt(nuevasParts.dia)>maxDias?(maxDias<10?"0"+maxDias:String(maxDias)):nuevasParts.dia;
+      onChange(nuevasParts.anio+"-"+nuevasParts.mes+"-"+diaFinal);
+    }else if(!nuevasParts.anio&&!nuevasParts.mes&&!nuevasParts.dia){
       onChange("");
-    }else{
-      // Estado parcial - guardamos lo que haya hasta que esté completo
-      var partial=(nuevoAnio||"YYYY")+"-"+(nuevoMes||"MM")+"-"+(nuevoDia||"DD");
-      // Solo emitir si está completo
-      if(nuevoAnio&&nuevoMes&&nuevoDia)onChange(partial);
     }
   }
 
@@ -341,19 +344,22 @@ function FechaSelector({label,value,onChange,minAnio}){
     <div className="flex flex-col gap-1">
       {label&&<label className="text-[10px] text-green-600 font-bold uppercase tracking-wider">{label}</label>}
       <div className="grid grid-cols-3 gap-1.5">
-        <select value={dia} onChange={function(e){actualizar(anio,mes,e.target.value);}} className="bg-gray-50 border border-gray-200 rounded-xl px-2 py-2.5 text-gray-800 text-sm focus:outline-none focus:border-green-400">
+        <select value={parts.dia} onChange={function(e){actualizar(Object.assign({},parts,{dia:e.target.value}));}} className="bg-gray-50 border border-gray-200 rounded-xl px-2 py-2.5 text-gray-800 text-sm focus:outline-none focus:border-green-400">
           <option value="">Día</option>
           {dias.map(function(d){return <option key={d} value={d}>{parseInt(d)}</option>;})}
         </select>
-        <select value={mes} onChange={function(e){actualizar(anio,e.target.value,dia);}} className="bg-gray-50 border border-gray-200 rounded-xl px-2 py-2.5 text-gray-800 text-sm focus:outline-none focus:border-green-400">
+        <select value={parts.mes} onChange={function(e){actualizar(Object.assign({},parts,{mes:e.target.value}));}} className="bg-gray-50 border border-gray-200 rounded-xl px-2 py-2.5 text-gray-800 text-sm focus:outline-none focus:border-green-400">
           <option value="">Mes</option>
           {meses.map(function(m){return <option key={m.n} value={m.n}>{m.l}</option>;})}
         </select>
-        <select value={anio} onChange={function(e){actualizar(e.target.value,mes,dia);}} className="bg-gray-50 border border-gray-200 rounded-xl px-2 py-2.5 text-gray-800 text-sm focus:outline-none focus:border-green-400">
+        <select value={parts.anio} onChange={function(e){actualizar(Object.assign({},parts,{anio:e.target.value}));}} className="bg-gray-50 border border-gray-200 rounded-xl px-2 py-2.5 text-gray-800 text-sm focus:outline-none focus:border-green-400">
           <option value="">Año</option>
           {anios.map(function(a){return <option key={a} value={a}>{a}</option>;})}
         </select>
       </div>
+      {(parts.dia||parts.mes||parts.anio)&&!(parts.dia&&parts.mes&&parts.anio)&&(
+        <p className="text-[10px] text-amber-600">⚠️ Completá los 3 campos para guardar</p>
+      )}
     </div>
   );
 }
