@@ -2242,41 +2242,141 @@ function VendidosModal({est,onClose,onEliminar}){
 
 function TorosModal({est,onClose,onUpdate}){
   var [ask,confirmDialog]=useConfirm();
-  var [form,setForm]=useState({caravana:"",raza:"",obs:""});
+  var [form,setForm]=useState({caravana:"",raza:"",fechaNac:"",propietario:"",cabana:"",fechaCompra:"",precioCompra:"",pesoActual:"",obs:""});
+  var [editandoId,setEditandoId]=useState(null);
+  var [verToro,setVerToro]=useState(null);
   var toros=est.toros||[];
   function setF(k,v){setForm(function(p){return Object.assign({},p,{[k]:v});});}
+  function reset(){setForm({caravana:"",raza:"",fechaNac:"",propietario:"",cabana:"",fechaCompra:"",precioCompra:"",pesoActual:"",obs:""});setEditandoId(null);}
   function guardar(){
     if(!form.caravana.trim())return;
-    onUpdate([...toros,{id:Date.now(),caravana:form.caravana.trim().toUpperCase(),raza:form.raza,obs:form.obs}]);
-    setForm({caravana:"",raza:"",obs:""});
+    var datos={
+      caravana:form.caravana.trim().toUpperCase(),
+      raza:form.raza,
+      fechaNac:form.fechaNac,
+      propietario:form.propietario.trim(),
+      cabana:form.cabana.trim(),
+      fechaCompra:form.fechaCompra,
+      precioCompra:form.precioCompra?parseFloat(form.precioCompra):null,
+      pesoActual:form.pesoActual?parseFloat(form.pesoActual):null,
+      obs:form.obs
+    };
+    if(editandoId){
+      onUpdate(toros.map(function(t){return t.id===editandoId?Object.assign({},t,datos):t;}));
+    }else{
+      onUpdate([...toros,Object.assign({id:Date.now()},datos)]);
+    }
+    reset();
   }
+  function editar(t){
+    setForm({
+      caravana:t.caravana||"",
+      raza:t.raza||"",
+      fechaNac:t.fechaNac||"",
+      propietario:t.propietario||"",
+      cabana:t.cabana||"",
+      fechaCompra:t.fechaCompra||"",
+      precioCompra:t.precioCompra?String(t.precioCompra):"",
+      pesoActual:t.pesoActual?String(t.pesoActual):"",
+      obs:t.obs||""
+    });
+    setEditandoId(t.id);
+    setVerToro(null);
+  }
+
+  // Vista detalle de un toro
+  if(verToro){
+    var t=verToro;
+    return(
+      <Modal title={"🐂 "+t.caravana} onClose={function(){setVerToro(null);}}>
+        <div className="flex flex-col gap-3">
+          <button onClick={function(){setVerToro(null);}} className="text-gray-700 text-sm font-bold text-left">← Volver</button>
+
+          <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 flex flex-col gap-1.5">
+            <p className="text-xs text-gray-500 uppercase font-bold mb-1">Datos generales</p>
+            <p className="text-gray-900 text-sm"><b>Caravana:</b> {t.caravana}</p>
+            {t.raza&&<p className="text-gray-900 text-sm"><b>Raza:</b> {t.raza}</p>}
+            {t.fechaNac&&<p className="text-gray-900 text-sm"><b>F. Nacimiento:</b> {fmtFecha(t.fechaNac)+(calcEdad(t.fechaNac)?" ("+calcEdad(t.fechaNac)+")":"")}</p>}
+            {t.cabana&&<p className="text-gray-900 text-sm"><b>Cabaña/Línea:</b> {t.cabana}</p>}
+            {t.propietario&&<p className="text-gray-900 text-sm"><b>Propietario:</b> {t.propietario}</p>}
+            {t.pesoActual&&<p className="text-gray-900 text-sm"><b>Peso actual:</b> {t.pesoActual+" kg"}</p>}
+          </div>
+
+          {(t.fechaCompra||t.precioCompra)&&(
+            <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 flex flex-col gap-1.5">
+              <p className="text-xs text-emerald-700 uppercase font-bold mb-1">Compra</p>
+              {t.fechaCompra&&<p className="text-gray-900 text-sm"><b>Fecha:</b> {fmtFecha(t.fechaCompra)}</p>}
+              {t.precioCompra&&<p className="text-gray-900 text-sm"><b>Precio:</b> {"$"+t.precioCompra.toLocaleString("es-AR")}</p>}
+            </div>
+          )}
+
+          {t.obs&&(
+            <div className="bg-gray-50 border border-gray-200 rounded-xl p-3">
+              <p className="text-xs text-gray-500 uppercase font-bold mb-1">Observaciones</p>
+              <p className="text-gray-900 text-sm">{t.obs}</p>
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            <button onClick={function(){editar(t);}} className="flex-1 py-2.5 rounded-xl border border-sky-300 bg-sky-50 text-sky-700 text-sm font-bold">✏️ Editar</button>
+            <button onClick={function(){ask("¿Eliminar toro?",function(){onUpdate(toros.filter(function(x){return x.id!==t.id;}));setVerToro(null);});}} className="flex-1 py-2.5 rounded-xl border border-red-300 bg-red-50 text-red-700 text-sm font-bold">🗑 Eliminar</button>
+          </div>
+          {confirmDialog}
+        </div>
+      </Modal>
+    );
+  }
+
   return(
-    <Modal title="🐂 Toros" onClose={onClose}>
+    <Modal title="🐂 Toros" onClose={function(){if(editandoId)reset();onClose();}}>
       <div className="flex flex-col gap-3">
         <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 flex flex-col gap-2">
-          <p className="text-xs font-black text-green-600 uppercase">+ Nuevo toro</p>
+          <p className="text-xs font-black text-green-600 uppercase">{editandoId?"✏️ Editar toro":"+ Nuevo toro"}</p>
+          <Inp label="Caravana *" placeholder="N° caravana" value={form.caravana} onChange={function(e){setF("caravana",e.target.value);}}/>
           <div className="grid grid-cols-2 gap-2">
-            <Inp label="Caravana" placeholder="N° caravana" value={form.caravana} onChange={function(e){setF("caravana",e.target.value);}}/>
             <Sel label="Raza" options={RAZAS} value={form.raza} onChange={function(e){setF("raza",e.target.value);}}/>
+            <Inp label="Fecha nacimiento" type="date" value={form.fechaNac} onChange={function(e){setF("fechaNac",e.target.value);}}/>
           </div>
+          <div className="grid grid-cols-2 gap-2">
+            <Inp label="Cabaña/Línea" placeholder="Opcional" value={form.cabana} onChange={function(e){setF("cabana",e.target.value);}}/>
+            <Inp label="Propietario" placeholder="Opcional" value={form.propietario} onChange={function(e){setF("propietario",e.target.value);}}/>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <Inp label="Fecha compra" type="date" value={form.fechaCompra} onChange={function(e){setF("fechaCompra",e.target.value);}}/>
+            <Inp label="Precio compra ($)" type="number" placeholder="0" value={form.precioCompra} onChange={function(e){setF("precioCompra",e.target.value);}}/>
+          </div>
+          <Inp label="Peso actual (kg)" type="number" placeholder="0" value={form.pesoActual} onChange={function(e){setF("pesoActual",e.target.value);}}/>
           <div className="flex flex-col gap-1">
             <label className="text-[10px] text-green-600 font-bold uppercase">Observaciones</label>
-            <textarea rows={2} value={form.obs} onChange={function(e){setF("obs",e.target.value);}} placeholder="Características..."
+            <textarea rows={2} value={form.obs} onChange={function(e){setF("obs",e.target.value);}} placeholder="Características, problemas, etc..."
               className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-gray-800 text-sm focus:outline-none focus:border-green-400 resize-none"/>
           </div>
-          <button onClick={guardar} style={{boxShadow:"0 1px 2px rgba(0,0,0,0.1)"}} className="w-full bg-emerald-600 text-gray-900 font-bold py-2.5 rounded-xl text-sm border border-emerald-500">Guardar Toro</button>
+          <div className="flex gap-2">
+            {editandoId&&<button onClick={reset} className="flex-1 py-2.5 rounded-xl border border-gray-200 text-gray-700 text-sm font-bold">Cancelar</button>}
+            <button onClick={guardar} style={{boxShadow:"0 1px 2px rgba(0,0,0,0.1)"}} className="flex-1 bg-emerald-300 text-white font-black py-2.5 rounded-xl text-sm border border-emerald-300">{editandoId?"Guardar cambios":"Guardar Toro"}</button>
+          </div>
         </div>
-        {toros.length===0&&<div className="text-center py-8 text-gray-400"><p className="text-4xl mb-2">🐂</p><p className="text-sm">Sin toros</p></div>}
+        {toros.length===0&&(
+          <div className="text-center py-8">
+            <p className="text-5xl mb-2">🐂</p>
+            <p className="text-gray-700 font-bold text-sm mb-1">Aún no hay toros</p>
+            <p className="text-gray-400 text-xs">Cargá tus toros con todos sus datos para llevar el registro completo</p>
+          </div>
+        )}
         {toros.map(function(t){
           return(
-            <div key={t.id} className="bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 flex items-start justify-between">
-              <div>
+            <button key={t.id} onClick={function(){setVerToro(t);}} className="text-left bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 flex items-start justify-between">
+              <div className="flex-1">
                 <p className="text-gray-800 font-black text-base">{t.caravana}</p>
-                {t.raza&&<p className="text-green-600 text-xs">{t.raza}</p>}
-                {t.obs&&<p className="text-gray-900 text-sm mt-0.5">{t.obs}</p>}
+                <div className="flex gap-2 flex-wrap mt-0.5">
+                  {t.raza&&<span className="text-[10px] bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full">{t.raza}</span>}
+                  {t.fechaNac&&<span className="text-[10px] text-gray-500">{calcEdad(t.fechaNac)||""}</span>}
+                  {t.cabana&&<span className="text-[10px] text-gray-500">· {t.cabana}</span>}
+                </div>
+                {t.pesoActual&&<p className="text-emerald-700 text-xs font-bold mt-0.5">{t.pesoActual+" kg"}</p>}
               </div>
-              <button onClick={function(){ask("¿Eliminar toro?",function(){onUpdate(toros.filter(function(x){return x.id!==t.id;}));});}} className="text-red-500 text-lg ml-2">✕</button>
-            </div>
+              <span className="text-gray-400 text-xl ml-2">›</span>
+            </button>
           );
         })}
         {confirmDialog}
