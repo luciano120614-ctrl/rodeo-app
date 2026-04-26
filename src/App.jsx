@@ -1851,6 +1851,349 @@ function SanidadMasivaModal({lote,onClose,onUpdate,onCrearAlerta,onUpdateSesione
   return null;
 }
 
+// ── Cargar Animales Modal (sesión de carga rápida) ───────────────────────────
+function CargarAnimalesModal({lote,onClose,onAgregarAnimales}){
+  var [form,setForm]=useState({caravana:"",sexo:"Hembra",categoria:"Vaquillona",raza:"",fechaNac:"",peso:""});
+  var [pendientes,setPendientes]=useState([]);
+  var [ask,confirmDialog]=useConfirm();
+  var caravRef=useRef();
+
+  function setF(k,v){setForm(function(p){return Object.assign({},p,{[k]:v});});}
+
+  function agregar(){
+    var c=form.caravana.trim().toUpperCase();
+    if(!c){alert("Falta la caravana");return;}
+    if((lote.animales||[]).some(function(a){return a.caravana===c;})){
+      alert("Ya existe un animal con caravana "+c+" en este lote");
+      return;
+    }
+    if(pendientes.some(function(p){return p.caravana===c;})){
+      alert("Ya cargaste la caravana "+c+" en esta sesión");
+      return;
+    }
+    var nuevo={
+      id:Date.now()+Math.random(),
+      caravana:c,
+      sexo:form.sexo,
+      categoria:form.categoria,
+      raza:form.raza,
+      fechaNac:form.fechaNac,
+      pesajes:form.peso?[{id:Date.now(),peso:parseFloat(form.peso),fecha:hoy()}]:[]
+    };
+    setPendientes([...pendientes,nuevo]);
+    // Limpiar solo la caravana, dejar el resto para el siguiente
+    setForm(function(p){return Object.assign({},p,{caravana:""});});
+    if(caravRef.current)setTimeout(function(){caravRef.current.focus();},80);
+  }
+
+  function quitar(id){
+    setPendientes(pendientes.filter(function(p){return p.id!==id;}));
+  }
+
+  function finalizar(){
+    if(pendientes.length===0){alert("No cargaste ningún animal");return;}
+    onAgregarAnimales(pendientes);
+    onClose();
+  }
+
+  return(
+    <Modal title="🆕 Cargar animales" onClose={function(){
+      if(pendientes.length>0){ask("¿Salir sin guardar? Se perderán "+pendientes.length+" animales sin cargar.",function(){onClose();});}
+      else onClose();
+    }}>
+      <div className="flex flex-col gap-3">
+        <p className="text-xs text-gray-500">Cargá varios animales seguidos. Los datos se mantienen del anterior, solo cambiás lo que haga falta.</p>
+
+        <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2 flex items-center justify-between">
+          <p className="text-emerald-800 font-bold text-sm">{pendientes.length+" animales cargados"}</p>
+          <button onClick={finalizar} disabled={pendientes.length===0} style={{boxShadow:"0 1px 2px rgba(0,0,0,0.1)"}} className={"font-black px-4 py-2 rounded-xl text-sm border "+(pendientes.length===0?"bg-gray-100 border-gray-200 text-gray-400":"bg-emerald-500 border-emerald-500 text-white")}>FIN</button>
+        </div>
+
+        <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 flex flex-col gap-2">
+          <Inp label="Caravana *" placeholder="N° caravana" value={form.caravana} onChange={function(e){setF("caravana",e.target.value);}} inputRef={caravRef}/>
+          <div className="grid grid-cols-2 gap-2">
+            <Sel label="Sexo" options={["Macho","Hembra"]} value={form.sexo} onChange={function(e){setF("sexo",e.target.value);}}/>
+            <Sel label="Categoría" options={CATEGORIAS} value={form.categoria} onChange={function(e){setF("categoria",e.target.value);}}/>
+          </div>
+          <Sel label="Raza" options={RAZAS} value={form.raza} onChange={function(e){setF("raza",e.target.value);}}/>
+          <FechaSelector label="Fecha nacimiento (opcional)" value={form.fechaNac} onChange={function(v){setF("fechaNac",v);}} minAnio={new Date().getFullYear()-25}/>
+          <Inp label="Peso inicial (opcional)" type="number" placeholder="kg" value={form.peso} onChange={function(e){setF("peso",e.target.value);}}/>
+          <button onClick={agregar} style={{boxShadow:"0 1px 2px rgba(0,0,0,0.1)"}} className="w-full bg-emerald-300 text-white font-black py-2.5 rounded-xl text-sm border border-emerald-300">+ Agregar animal</button>
+        </div>
+
+        {pendientes.length>0&&(
+          <div className="flex flex-col gap-1.5 max-h-72 overflow-y-auto">
+            <p className="text-xs font-black text-gray-500 uppercase">Pendientes de guardar</p>
+            {[...pendientes].reverse().map(function(p){
+              return(
+                <div key={p.id} className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 flex items-center justify-between">
+                  <div className="flex-1">
+                    <p className="text-gray-900 font-black text-sm">{p.caravana}</p>
+                    <div className="flex gap-1.5 flex-wrap">
+                      <span className="text-[10px] text-gray-500">{p.sexo+" · "+p.categoria}</span>
+                      {p.raza&&<span className="text-[10px] text-gray-500">· {p.raza}</span>}
+                      {p.pesajes&&p.pesajes.length>0&&<span className="text-[10px] text-emerald-700 font-bold">{p.pesajes[0].peso+"kg"}</span>}
+                    </div>
+                  </div>
+                  <button onClick={function(){quitar(p.id);}} className="text-red-500 text-lg ml-2">✕</button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+      {confirmDialog}
+    </Modal>
+  );
+}
+
+// ── Marcar / Señalar Animales Modal ──────────────────────────────────────────
+function MarcarAnimalesModal({lote,onClose,onUpdate,onUpdateSesiones}){
+  var animales=lote.animales||[];
+  var sesiones=lote.marcasSesiones||[];
+  var [modo,setModo]=useState("config"); // config -> manga -> resumen
+  var [form,setForm]=useState({tipo:"Marca a fuego",lugar:"Oreja derecha",descripcion:"",fecha:hoy(),obs:""});
+  var [registros,setRegistros]=useState([]); // [{caravana, animalId}]
+  var [busq,setBusq]=useState("");
+  var [encontrada,setEncontrada]=useState(null);
+  var [verSesion,setVerSesion]=useState(null);
+  var [anioFiltro,setAnioFiltro]=useState("");
+  var busqRef=useRef();
+  var [ask,confirmDialog]=useConfirm();
+
+  function setF(k,v){setForm(function(p){return Object.assign({},p,{[k]:v});});}
+
+  function iniciar(){
+    if(!form.descripcion.trim()&&form.tipo!=="Marca a fuego"){alert("Falta la descripción");return;}
+    setRegistros([]);setBusq("");setEncontrada(null);
+    setModo("manga");
+    if(busqRef.current)setTimeout(function(){busqRef.current.focus();},80);
+  }
+
+  function buscar(val){
+    var q=val.trim().toUpperCase();
+    if(!q){setEncontrada(null);return;}
+    var match=animales.find(function(a){return a.caravana===q;});
+    setEncontrada(match||"notfound");
+  }
+
+  function agregar(){
+    if(!encontrada||encontrada==="notfound")return;
+    if(registros.some(function(r){return r.animalId===encontrada.id;})){
+      setBusq("");setEncontrada(null);
+      if(busqRef.current)setTimeout(function(){busqRef.current.focus();},80);
+      return;
+    }
+    setRegistros([...registros,{animalId:encontrada.id,caravana:encontrada.caravana,sexo:encontrada.sexo,categoria:encontrada.categoria}]);
+    setBusq("");setEncontrada(null);
+    if(busqRef.current)setTimeout(function(){busqRef.current.focus();},80);
+  }
+
+  function quitar(id){
+    setRegistros(registros.filter(function(r){return r.animalId!==id;}));
+  }
+
+  function finalizar(){
+    if(registros.length===0){alert("No registraste ningún animal");return;}
+    var nuevoReg={
+      tipo:form.tipo,
+      lugar:form.lugar,
+      descripcion:form.descripcion.trim(),
+      fecha:form.fecha,
+      obs:form.obs||null
+    };
+    // Agregar la marca a cada animal en su array de "marcas"
+    var animalesAct=animales.map(function(a){
+      var encontrado=registros.find(function(r){return r.animalId===a.id;});
+      if(!encontrado)return a;
+      var marcaAnim=Object.assign({id:Date.now()+Math.random()},nuevoReg);
+      return Object.assign({},a,{marcasSenal:[...(a.marcasSenal||[]),marcaAnim]});
+    });
+    onUpdate(animalesAct);
+    if(onUpdateSesiones){
+      var sesion=Object.assign({id:Date.now(),caravanas:registros},nuevoReg);
+      onUpdateSesiones([...sesiones,sesion]);
+    }
+    setModo("resumen");
+  }
+
+  function eliminarSesion(id){
+    if(onUpdateSesiones){
+      onUpdateSesiones(sesiones.filter(function(s){return s.id!==id;}));
+    }
+  }
+
+  // Ver detalle sesión guardada
+  if(verSesion){
+    var s=verSesion;
+    return(
+      <Modal title={"🏷️ "+s.tipo+" · "+fmtFecha(s.fecha)} onClose={function(){setVerSesion(null);}}>
+        <div className="flex flex-col gap-3">
+          <button onClick={function(){setVerSesion(null);}} className="text-gray-700 text-sm font-bold text-left">← Volver al historial</button>
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex flex-col gap-1">
+            <p className="text-amber-800 font-black text-base">{s.tipo}</p>
+            {s.lugar&&<p className="text-amber-700 text-xs"><b>Lugar:</b> {s.lugar}</p>}
+            {s.descripcion&&<p className="text-amber-700 text-xs"><b>Descripción:</b> {s.descripcion}</p>}
+            <p className="text-amber-600 text-xs">{fmtFecha(s.fecha)}</p>
+            {s.obs&&<p className="text-gray-700 text-xs mt-1"><b>Obs:</b> {s.obs}</p>}
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <p className="text-xs font-black text-gray-500 uppercase">{(s.caravanas||[]).length+" animales marcados"}</p>
+            <div className="flex flex-col gap-1 max-h-72 overflow-y-auto">
+              {(s.caravanas||[]).map(function(c){
+                return(
+                  <div key={c.animalId} className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 flex items-center justify-between">
+                    <p className="text-gray-900 font-bold text-sm">{c.caravana}</p>
+                    <p className="text-gray-500 text-xs">{(c.sexo||"")+" · "+(c.categoria||"")}</p>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </Modal>
+    );
+  }
+
+  if(modo==="config"){
+    var aniosDisp=aniosDe(sesiones);
+    var sesOrd=[...sesiones].sort(function(a,b){return b.fecha.localeCompare(a.fecha);});
+    var sesFiltradas=anioFiltro?sesOrd.filter(function(x){return x.fecha&&x.fecha.substring(0,4)===anioFiltro;}):sesOrd;
+    return(
+      <Modal title="🏷️ Marcar / Señalar" onClose={onClose}>
+        <div className="flex flex-col gap-3">
+          <p className="text-xs text-gray-500">Registrá marcas, tatuajes, mochetas o aros aplicados a los animales.</p>
+
+          <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 flex flex-col gap-2">
+            <p className="text-xs font-black text-green-600 uppercase">Datos de la marca</p>
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] text-gray-500 font-bold uppercase">Tipo</label>
+              <select value={form.tipo} onChange={function(e){setF("tipo",e.target.value);}} className="bg-white border border-gray-200 rounded-xl px-3 py-2.5 text-gray-900 text-sm focus:outline-none">
+                <option>Marca a fuego</option>
+                <option>Tatuaje</option>
+                <option>Mocheta</option>
+                <option>Aro</option>
+                <option>Caravana nueva</option>
+                <option>Otro</option>
+              </select>
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] text-gray-500 font-bold uppercase">Lugar</label>
+              <select value={form.lugar} onChange={function(e){setF("lugar",e.target.value);}} className="bg-white border border-gray-200 rounded-xl px-3 py-2.5 text-gray-900 text-sm focus:outline-none">
+                <option>Oreja derecha</option>
+                <option>Oreja izquierda</option>
+                <option>Anca derecha</option>
+                <option>Anca izquierda</option>
+                <option>Cogote</option>
+                <option>Otro</option>
+              </select>
+            </div>
+            <Inp label="Descripción" placeholder="Ej: número, color, código..." value={form.descripcion} onChange={function(e){setF("descripcion",e.target.value);}}/>
+            <Inp label="Fecha" type="date" value={form.fecha} onChange={function(e){setF("fecha",e.target.value);}}/>
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] text-gray-500 font-bold uppercase">Observaciones</label>
+              <textarea rows={2} value={form.obs} onChange={function(e){setF("obs",e.target.value);}} placeholder="Opcional..."
+                className="bg-white border border-gray-200 rounded-xl px-3 py-2 text-gray-800 text-sm focus:outline-none focus:border-green-400 resize-none"/>
+            </div>
+          </div>
+
+          <button onClick={iniciar} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12)"}} className="w-full bg-emerald-300 text-white font-black py-3 rounded-xl text-base border border-emerald-300">▶ Comenzar</button>
+
+          {sesiones.length>0&&(
+            <div className="border-t border-gray-200 pt-3 flex flex-col gap-2">
+              <p className="text-xs font-black text-gray-500 uppercase">📜 Historial de marcas</p>
+              {aniosDisp.length>1&&<FiltroAnio anios={aniosDisp} valor={anioFiltro} onChange={function(e){setAnioFiltro(e.target.value);}} total={sesiones.length} filtrados={sesFiltradas.length}/>}
+              {sesFiltradas.length===0&&<p className="text-gray-400 text-xs text-center py-2">{anioFiltro?"Sin sesiones en "+anioFiltro:"Sin sesiones guardadas"}</p>}
+              {sesFiltradas.map(function(s){
+                return(
+                  <div key={s.id} className="bg-amber-50 border border-amber-200 rounded-xl px-3 py-2.5 flex items-center justify-between">
+                    <button onClick={function(){setVerSesion(s);}} className="flex-1 text-left">
+                      <p className="text-amber-900 font-black text-sm">🏷️ {s.tipo}{s.descripcion?" · "+s.descripcion:""}</p>
+                      <p className="text-amber-600 text-xs">{fmtFecha(s.fecha)+" · "+(s.caravanas||[]).length+" animales"}</p>
+                      {s.lugar&&<p className="text-amber-500 text-[10px]">📍 {s.lugar}</p>}
+                    </button>
+                    <button onClick={function(){ask("¿Eliminar esta sesión?",function(){eliminarSesion(s.id);});}} className="text-red-500 text-lg ml-2">✕</button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+        {confirmDialog}
+      </Modal>
+    );
+  }
+
+  if(modo==="manga"){
+    return(
+      <Modal title={"🏷️ "+form.tipo} onClose={function(){
+        if(registros.length>0){ask("¿Salir sin guardar?",function(){onClose();});}
+        else onClose();
+      }}>
+        <div className="flex flex-col gap-3">
+          <button onClick={function(){
+            if(registros.length>0){ask("¿Volver a configurar? Se perderá el registro.",function(){setModo("config");setRegistros([]);});}
+            else setModo("config");
+          }} className="text-gray-700 text-sm font-bold text-left">← Volver a configuración</button>
+
+          <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2 flex items-center justify-between">
+            <p className="text-emerald-800 font-bold text-sm">{registros.length+" animales marcados"}</p>
+            <button onClick={finalizar} disabled={registros.length===0} style={{boxShadow:"0 1px 2px rgba(0,0,0,0.1)"}} className={"font-black px-4 py-2 rounded-xl text-sm border "+(registros.length===0?"bg-gray-100 border-gray-200 text-gray-400":"bg-emerald-500 border-emerald-500 text-white")}>FIN</button>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <Inp label="Buscar caravana" placeholder="Escribí la caravana..." value={busq} onChange={function(e){setBusq(e.target.value);buscar(e.target.value);}} inputRef={busqRef}/>
+            {encontrada==="notfound"&&<p className="text-red-600 text-xs font-bold">No se encontró esa caravana en el lote</p>}
+            {encontrada&&encontrada!=="notfound"&&(
+              <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2 flex items-center justify-between">
+                <div>
+                  <p className="text-gray-900 font-bold text-sm">{encontrada.caravana}</p>
+                  <p className="text-gray-500 text-xs">{encontrada.sexo+" · "+encontrada.categoria}</p>
+                </div>
+                <button onClick={agregar} className="bg-emerald-300 text-white font-black px-4 py-2 rounded-xl text-sm border border-emerald-300">+ Marcar</button>
+              </div>
+            )}
+          </div>
+
+          <div className="flex flex-col gap-1.5 max-h-72 overflow-y-auto">
+            {registros.length===0&&<p className="text-gray-400 text-center py-6 text-sm">Buscá animales para marcar</p>}
+            {[...registros].reverse().map(function(r){
+              return(
+                <div key={r.animalId} className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 flex items-center justify-between">
+                  <div>
+                    <p className="text-gray-900 font-bold text-sm">{r.caravana}</p>
+                    <p className="text-gray-500 text-xs">{r.sexo+" · "+r.categoria}</p>
+                  </div>
+                  <button onClick={function(){quitar(r.animalId);}} className="text-red-500 text-lg">✕</button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        {confirmDialog}
+      </Modal>
+    );
+  }
+
+  if(modo==="resumen"){
+    return(
+      <Modal title="✅ Marca registrada" onClose={onClose}>
+        <div className="flex flex-col gap-3">
+          <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-center">
+            <p className="text-5xl mb-2">🏷️</p>
+            <p className="text-emerald-800 font-black text-lg">{registros.length+" animales marcados"}</p>
+            <p className="text-emerald-600 text-sm mt-1">{form.tipo+(form.descripcion?" · "+form.descripcion:"")}</p>
+            <p className="text-emerald-500 text-xs">{fmtFecha(form.fecha)}</p>
+          </div>
+          <button onClick={onClose} className="w-full bg-emerald-300 text-white font-black py-3 rounded-xl text-sm border border-emerald-300">Cerrar</button>
+        </div>
+      </Modal>
+    );
+  }
+
+  return null;
+}
+
 // ── Repro Modal ───────────────────────────────────────────────────────────────
 function ReproModal({lote,onClose,onUpdate,toros,tipoDirecto}){
   var animales=lote.animales||[];
@@ -3349,6 +3692,8 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
   var [showManga,setShowManga]=useState(false);
   var [reproDirecto,setReproDirecto]=useState(null);
   var [showSanidadMasiva,setShowSanidadMasiva]=useState(false);
+  var [showCargarAnim,setShowCargarAnim]=useState(false);
+  var [showMarcar,setShowMarcar]=useState(false);
   var [showAgro,setShowAgro]=useState(false);
   var [exportRodeo,setExportRodeo]=useState(null);
   var [ask,confirmDialog]=useConfirm();
@@ -3788,6 +4133,24 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
       }} onUpdate={actualizar} onDelete={eliminar} lotes={allLotes} loteActualId={loteId} establecimientos={establecimientos} estId={estId} onMoverEst={moverEst} onVender={venderAnimal} nombreLote={lote.nombre} reproSesionesLote={lote.reproSesiones||[]}/>}
       {resumenSesion&&<ResumenSesionModal sesion={resumenSesion} nombreLote={lote.nombre} animales={animales} onVerAnimal={function(id){setSesionPendienteReabrir(resumenSesion);setResumenSesion(null);setDetalleId(id);}} onClose={function(){setResumenSesion(null);}}/>}
       {showHistorial&&<HistorialModal sesiones={sesiones} onClose={function(){setShowHistorial(false);}} onVerSesion={function(s){setShowHistorial(false);setResumenSesion(s);}} onEliminarSesion={function(id){setLotes(function(prev){return prev.map(function(l){return l.id===loteId?Object.assign({},l,{sesiones:l.sesiones.filter(function(s){return s.id!==id;})}):l;});});}}/>}
+      {showCargarAnim&&<CargarAnimalesModal lote={lote} onClose={function(){setShowCargarAnim(false);}}
+        onAgregarAnimales={function(nuevos){
+          // Agregar todos al lote, registrar logCambio y historial de lotes
+          var conHist=nuevos.map(function(n){
+            return Object.assign({},n,{historialLotes:[{fecha:hoy(),lote:lote.nombre}]});
+          });
+          logCambio("animales_creados","Se cargaron "+nuevos.length+" animales","Lote: "+lote.nombre);
+          setLotes(function(prev){return prev.map(function(l){return l.id===loteId?Object.assign({},l,{animales:[...l.animales,...conHist]}):l;});});
+        }}
+      />}
+      {showMarcar&&<MarcarAnimalesModal lote={lote} onClose={function(){setShowMarcar(false);}}
+        onUpdate={function(animalesAct){
+          setLotes(function(prev){return prev.map(function(l){return l.id===loteId?Object.assign({},l,{animales:animalesAct}):l;});});
+        }}
+        onUpdateSesiones={function(sesionesNuevas){
+          setLotes(function(prev){return prev.map(function(l){return l.id===loteId?Object.assign({},l,{marcasSesiones:sesionesNuevas}):l;});});
+        }}
+      />}
       {showSanidadMasiva&&<SanidadMasivaModal lote={lote} onClose={function(){setShowSanidadMasiva(false);}}
         onUpdate={function(animalesAct){
           setLotes(function(prev){return prev.map(function(l){return l.id===loteId?Object.assign({},l,{animales:animalesAct}):l;});});
@@ -3861,6 +4224,22 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
                 <p className="text-[10px] text-purple-600 font-normal">Vacunar/desparasitar varios juntos</p>
               </div>
               <span className="text-purple-400">›</span>
+            </button>
+            <button onClick={function(){setShowManga(false);setShowCargarAnim(true);}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12)"}} className="w-full bg-emerald-50 border border-emerald-200 text-emerald-800 font-bold py-3 rounded-xl text-sm flex items-center gap-3 px-4">
+              <span className="text-2xl">🆕</span>
+              <div className="text-left flex-1">
+                <p className="font-black">Cargar animales</p>
+                <p className="text-[10px] text-emerald-600 font-normal">Dar de alta varios juntos</p>
+              </div>
+              <span className="text-emerald-400">›</span>
+            </button>
+            <button onClick={function(){setShowManga(false);setShowMarcar(true);}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12)"}} className="w-full bg-amber-50 border border-amber-200 text-amber-800 font-bold py-3 rounded-xl text-sm flex items-center gap-3 px-4">
+              <span className="text-2xl">🏷️</span>
+              <div className="text-left flex-1">
+                <p className="font-black">Marcar / Señalar</p>
+                <p className="text-[10px] text-amber-600 font-normal">Marca, tatuaje, mocheta, aro</p>
+              </div>
+              <span className="text-amber-400">›</span>
             </button>
           </div>
         </Modal>
