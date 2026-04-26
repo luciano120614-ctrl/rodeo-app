@@ -1530,15 +1530,18 @@ function HistorialModal({sesiones,onClose,onVerSesion,onEliminarSesion}){
 }
 
 // ── Sanidad Masiva Modal ──────────────────────────────────────────────────────
-function SanidadMasivaModal({lote,onClose,onUpdate,onCrearAlerta}){
+function SanidadMasivaModal({lote,onClose,onUpdate,onCrearAlerta,onUpdateSesiones}){
   var animales=lote.animales||[];
-  var [modo,setModo]=useState("config"); // config -> manga -> resumen
+  var sesiones=lote.sanidadSesiones||[];
+  var [modo,setModo]=useState("config"); // config -> manga -> resumen | verSesion
   var [seleccion,setSeleccion]=useState("todos"); // todos | manual
   var [formSesion,setFormSesion]=useState({tipo:"Vacuna",nombre:"",fecha:hoy(),proxima:"",dosis:"",obs:""});
   var [seleccionados,setSeleccionados]=useState([]); // ids de animales registrados
   var [busq,setBusq]=useState("");
   var [encontrada,setEncontrada]=useState(null);
   var [crearAlertaProx,setCrearAlertaProx]=useState(true);
+  var [verSesion,setVerSesion]=useState(null);
+  var [anioFiltro,setAnioFiltro]=useState("");
   var busqRef=useRef();
   var [ask,confirmDialog]=useConfirm();
 
@@ -1589,10 +1592,22 @@ function SanidadMasivaModal({lote,onClose,onUpdate,onCrearAlerta}){
       obs:formSesion.obs||null,
       sesionMasiva:true
     };
+    // Capturar caravanas para la sesión guardada
+    var animalesTratados=animales.filter(function(a){return seleccionados.indexOf(a.id)>=0;});
+    var caravanas=animalesTratados.map(function(a){return {id:a.id,caravana:a.caravana,sexo:a.sexo,categoria:a.categoria};});
+
     var animalesAct=animales.map(function(a){
       if(seleccionados.indexOf(a.id)===-1)return a;
       return Object.assign({},a,{sanidad:[...(a.sanidad||[]),Object.assign({},nuevoReg,{id:Date.now()+Math.random()})]});
     });
+    onUpdate(animalesAct);
+
+    // Guardar la sesión en el lote
+    if(onUpdateSesiones){
+      var nuevaSesion=Object.assign({id:Date.now(),caravanas:caravanas},nuevoReg);
+      onUpdateSesiones([...sesiones,nuevaSesion]);
+    }
+
     if(formSesion.proxima&&crearAlertaProx&&onCrearAlerta){
       onCrearAlerta({
         titulo:formSesion.nombre+" (refuerzo)",
@@ -1602,11 +1617,60 @@ function SanidadMasivaModal({lote,onClose,onUpdate,onCrearAlerta}){
         nota:"Refuerzo "+formSesion.tipo.toLowerCase()+" para "+seleccionados.length+" animales del lote "+lote.nombre
       });
     }
-    onUpdate(animalesAct);
+
     setModo("resumen");
   }
 
+  function eliminarSesion(id){
+    if(onUpdateSesiones){
+      onUpdateSesiones(sesiones.filter(function(s){return s.id!==id;}));
+    }
+  }
+
+  // ── VER DETALLE DE SESIÓN ──
+  if(verSesion){
+    var s=verSesion;
+    return(
+      <Modal title={"💊 "+s.tipo+" · "+fmtFecha(s.fecha)} onClose={function(){setVerSesion(null);}}>
+        <div className="flex flex-col gap-3">
+          <button onClick={function(){setVerSesion(null);}} className="text-gray-700 text-sm font-bold text-left">← Volver al historial</button>
+
+          <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 flex flex-col gap-1">
+            <p className="text-emerald-800 font-black text-base">{s.nombre}</p>
+            <p className="text-emerald-600 text-xs">{s.tipo}</p>
+            <p className="text-emerald-500 text-xs">{fmtFecha(s.fecha)}</p>
+          </div>
+
+          {(s.dosis||s.proxima||s.obs)&&(
+            <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 flex flex-col gap-1">
+              {s.dosis&&<p className="text-gray-800 text-sm"><b>Dosis:</b> {s.dosis}</p>}
+              {s.proxima&&<p className="text-gray-800 text-sm"><b>Próxima dosis:</b> {fmtFecha(s.proxima)}</p>}
+              {s.obs&&<p className="text-gray-800 text-sm"><b>Obs:</b> {s.obs}</p>}
+            </div>
+          )}
+
+          <div className="flex flex-col gap-1.5">
+            <p className="text-xs font-black text-gray-500 uppercase">{(s.caravanas||[]).length+" animales tratados"}</p>
+            <div className="flex flex-col gap-1 max-h-72 overflow-y-auto">
+              {(s.caravanas||[]).map(function(c){
+                return(
+                  <div key={c.id} className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 flex items-center justify-between">
+                    <p className="text-gray-900 font-bold text-sm">{c.caravana}</p>
+                    <p className="text-gray-500 text-xs">{(c.sexo||"")+" · "+(c.categoria||"")}</p>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </Modal>
+    );
+  }
+
   if(modo==="config"){
+    var aniosDisp=aniosDe(sesiones);
+    var sesOrd=[...sesiones].sort(function(a,b){return b.fecha.localeCompare(a.fecha);});
+    var sesFiltradas=anioFiltro?sesOrd.filter(function(x){return x.fecha&&x.fecha.substring(0,4)===anioFiltro;}):sesOrd;
     return(
       <Modal title="💊 Sanidad masiva" onClose={onClose}>
         <div className="flex flex-col gap-3">
@@ -1664,7 +1728,30 @@ function SanidadMasivaModal({lote,onClose,onUpdate,onCrearAlerta}){
           </div>
 
           <button onClick={iniciar} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12)"}} className="w-full bg-emerald-300 text-white font-black py-3 rounded-xl text-base border border-emerald-300">▶ Comenzar</button>
+
+          {/* Historial de sesiones de sanidad masiva */}
+          {sesiones.length>0&&(
+            <div className="border-t border-gray-200 pt-3 flex flex-col gap-2">
+              <p className="text-xs font-black text-gray-500 uppercase">📜 Historial de sanidad masiva</p>
+              {aniosDisp.length>1&&<FiltroAnio anios={aniosDisp} valor={anioFiltro} onChange={function(e){setAnioFiltro(e.target.value);}} total={sesiones.length} filtrados={sesFiltradas.length}/>}
+              {sesFiltradas.length===0&&<p className="text-gray-400 text-xs text-center py-2">{anioFiltro?"Sin sesiones en "+anioFiltro:"Sin sesiones guardadas"}</p>}
+              {sesFiltradas.map(function(s){
+                var iconoTipo=s.tipo==="Vacuna"?"💉":s.tipo==="Antiparasitario"?"🪱":s.tipo==="Tratamiento / Antibiótico"?"💊":s.tipo==="Suplemento / Vitaminas"?"🧪":"🩹";
+                return(
+                  <div key={s.id} className="bg-purple-50 border border-purple-200 rounded-xl px-3 py-2.5 flex items-center justify-between">
+                    <button onClick={function(){setVerSesion(s);}} className="flex-1 text-left">
+                      <p className="text-purple-900 font-black text-sm">{iconoTipo+" "+s.nombre}</p>
+                      <p className="text-purple-600 text-xs">{fmtFecha(s.fecha)+" · "+(s.caravanas||[]).length+" animales"}</p>
+                      {s.proxima&&<p className="text-amber-700 text-[10px]">📅 Próx: {fmtFecha(s.proxima)}</p>}
+                    </button>
+                    <button onClick={function(){ask("¿Eliminar esta sesión?",function(){eliminarSesion(s.id);});}} className="text-red-500 text-lg ml-2">✕</button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
+        {confirmDialog}
       </Modal>
     );
   }
@@ -1752,7 +1839,7 @@ function SanidadMasivaModal({lote,onClose,onUpdate,onCrearAlerta}){
             <p className="text-xs text-gray-500 uppercase font-bold mb-1">Detalles</p>
             {formSesion.dosis&&<p className="text-gray-800 text-sm"><b>Dosis:</b> {formSesion.dosis}</p>}
             {formSesion.obs&&<p className="text-gray-800 text-sm"><b>Obs:</b> {formSesion.obs}</p>}
-            <p className="text-gray-500 text-xs mt-1">El registro quedó guardado en la pestaña 💉 Sanidad de cada animal.</p>
+            <p className="text-gray-500 text-xs mt-1">El registro quedó guardado en la pestaña 💉 Sanidad de cada animal y en el historial.</p>
           </div>
 
           <button onClick={onClose} className="w-full bg-emerald-300 text-white font-black py-3 rounded-xl text-sm border border-emerald-300">Cerrar</button>
@@ -3704,6 +3791,9 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
       {showSanidadMasiva&&<SanidadMasivaModal lote={lote} onClose={function(){setShowSanidadMasiva(false);}}
         onUpdate={function(animalesAct){
           setLotes(function(prev){return prev.map(function(l){return l.id===loteId?Object.assign({},l,{animales:animalesAct}):l;});});
+        }}
+        onUpdateSesiones={function(sesionesNuevas){
+          setLotes(function(prev){return prev.map(function(l){return l.id===loteId?Object.assign({},l,{sanidadSesiones:sesionesNuevas}):l;});});
         }}
         onCrearAlerta={function(alerta){
           if(setEstablecimientos&&estId){
