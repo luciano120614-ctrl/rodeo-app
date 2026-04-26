@@ -1530,7 +1530,7 @@ function HistorialModal({sesiones,onClose,onVerSesion,onEliminarSesion}){
 }
 
 // ── Repro Modal ───────────────────────────────────────────────────────────────
-function ReproModal({lote,onClose,onUpdate,toros}){
+function ReproModal({lote,onClose,onUpdate,toros,tipoDirecto}){
   var animales=lote.animales||[];
   var hembras=animales.filter(function(a){return a.sexo==="Hembra";});
   var sesiones=lote.reproSesiones||[];
@@ -1546,6 +1546,16 @@ function ReproModal({lote,onClose,onUpdate,toros}){
   var [exportRepro,setExportRepro]=useState(null);
   var [anioRepro,setAnioRepro]=useState("");
   var [showAnalisis,setShowAnalisis]=useState(false);
+
+  // Si viene tipoDirecto desde Manga, arrancar la sesión al toque
+  useEffect(function(){
+    if(tipoDirecto){
+      setTipoSesion(tipoDirecto);
+      setSesionActual({fecha:hoy(),tipo:tipoDirecto});
+      setLog([]);setBusq("");setEncontrada(null);
+      setModo("manga");
+    }
+  },[tipoDirecto]);
 
   function setF(k,v){setForm(function(p){return Object.assign({},p,{[k]:v});});}
 
@@ -3014,6 +3024,8 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
   var [showHistorial,setShowHistorial]=useState(false);
   var [showRenombrar,setShowRenombrar]=useState(false);
   var [showRepro,setShowRepro]=useState(false);
+  var [showManga,setShowManga]=useState(false);
+  var [reproDirecto,setReproDirecto]=useState(null); // tacto/servicio/parto - inicia sesión directa
   var [showAgro,setShowAgro]=useState(false);
   var [exportRodeo,setExportRodeo]=useState(null);
   var [ask,confirmDialog]=useConfirm();
@@ -3199,8 +3211,8 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
                 {esMixto&&<button onClick={function(){setShowAgro(true);}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08)"}} className="btn-flash bg-amber-400 text-amber-900 font-bold px-3 py-2 rounded-xl text-sm border border-amber-400">🌾 Agro</button>}
 
                 <button onClick={function(){setShowHistorial(true);}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12)"}} className="btn-flash bg-white border border-gray-200 text-gray-700 font-bold px-3 py-2 rounded-xl text-sm">📅{sesiones.length>0?" "+sesiones.length:""}</button>
-                <button onClick={function(){setVista("manga");}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12)"}} className={"btn-flash font-bold px-3 py-2 rounded-xl text-sm border "+(sesionEnCurso?"bg-amber-500 border-amber-500 text-white":"bg-sky-400 border-sky-400 text-white")}>
-                  {sesionEnCurso?"⚖️ Retomar":"⚖️ Pesar"}
+                <button onClick={function(){if(sesionEnCurso){setVista("manga");}else{setShowManga(true);}}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12)"}} className={"btn-flash font-bold px-3 py-2 rounded-xl text-sm border "+(sesionEnCurso?"bg-amber-500 border-amber-500 text-white":"bg-sky-400 border-sky-400 text-white")}>
+                  {sesionEnCurso?"⚖️ Retomar":"🐂 Manga"}
                 </button>
                 <button onClick={function(){setShowNuevo(true);}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08)"}} className="btn-flash bg-emerald-300 text-white font-black px-3 py-2 rounded-xl text-sm border border-emerald-300">+ Animal</button>
               </div>
@@ -3453,7 +3465,7 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
       }} onUpdate={actualizar} onDelete={eliminar} lotes={allLotes} loteActualId={loteId} establecimientos={establecimientos} estId={estId} onMoverEst={moverEst} onVender={venderAnimal} nombreLote={lote.nombre} reproSesionesLote={lote.reproSesiones||[]}/>}
       {resumenSesion&&<ResumenSesionModal sesion={resumenSesion} nombreLote={lote.nombre} animales={animales} onVerAnimal={function(id){setSesionPendienteReabrir(resumenSesion);setResumenSesion(null);setDetalleId(id);}} onClose={function(){setResumenSesion(null);}}/>}
       {showHistorial&&<HistorialModal sesiones={sesiones} onClose={function(){setShowHistorial(false);}} onVerSesion={function(s){setShowHistorial(false);setResumenSesion(s);}} onEliminarSesion={function(id){setLotes(function(prev){return prev.map(function(l){return l.id===loteId?Object.assign({},l,{sesiones:l.sesiones.filter(function(s){return s.id!==id;})}):l;});});}}/>}
-      {showRepro&&<ReproModal lote={lote} toros={establecimientos?(establecimientos.find(function(e){return e.id===estId;})||{}).toros||[]:lote.toros||[]} onClose={function(){setShowRepro(false);}} onUpdate={function(sesion,nuevosAnimales,deleteId){
+      {showRepro&&<ReproModal lote={lote} toros={establecimientos?(establecimientos.find(function(e){return e.id===estId;})||{}).toros||[]:lote.toros||[]} tipoDirecto={reproDirecto} onClose={function(){setShowRepro(false);setReproDirecto(null);}} onUpdate={function(sesion,nuevosAnimales,deleteId){
         setLotes(function(prev){
           return prev.map(function(l){
             if(l.id!==loteId)return l;
@@ -3466,6 +3478,52 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
           });
         });
       }}/>}
+      {showManga&&(
+        <Modal title="🐂 Trabajos de manga" onClose={function(){setShowManga(false);}}>
+          <div className="flex flex-col gap-2">
+            <p className="text-xs text-gray-500 mb-1">Elegí qué trabajo querés hacer:</p>
+            <button onClick={function(){setShowManga(false);setVista("manga");}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12)"}} className="w-full bg-sky-50 border border-sky-200 text-sky-800 font-bold py-3 rounded-xl text-sm flex items-center gap-3 px-4">
+              <span className="text-2xl">⚖️</span>
+              <div className="text-left flex-1">
+                <p className="font-black">Pesar</p>
+                <p className="text-[10px] text-sky-600 font-normal">Sesión de pesaje</p>
+              </div>
+              <span className="text-sky-400">›</span>
+            </button>
+            <button onClick={function(){setShowManga(false);setReproDirecto("tacto");setShowRepro(true);}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12)"}} className="w-full bg-pink-50 border border-pink-200 text-pink-800 font-bold py-3 rounded-xl text-sm flex items-center gap-3 px-4">
+              <span className="text-2xl">🔍</span>
+              <div className="text-left flex-1">
+                <p className="font-black">Tacto</p>
+                <p className="text-[10px] text-pink-600 font-normal">Chequear preñez</p>
+              </div>
+              <span className="text-pink-400">›</span>
+            </button>
+            <button onClick={function(){setShowManga(false);setReproDirecto("servicio");setShowRepro(true);}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12)"}} className="w-full bg-pink-50 border border-pink-200 text-pink-800 font-bold py-3 rounded-xl text-sm flex items-center gap-3 px-4">
+              <span className="text-2xl">💉</span>
+              <div className="text-left flex-1">
+                <p className="font-black">Servicio</p>
+                <p className="text-[10px] text-pink-600 font-normal">Registrar monta o IA</p>
+              </div>
+              <span className="text-pink-400">›</span>
+            </button>
+            <button onClick={function(){setShowManga(false);setReproDirecto("parto");setShowRepro(true);}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12)"}} className="w-full bg-pink-50 border border-pink-200 text-pink-800 font-bold py-3 rounded-xl text-sm flex items-center gap-3 px-4">
+              <span className="text-2xl">🐄</span>
+              <div className="text-left flex-1">
+                <p className="font-black">Parto</p>
+                <p className="text-[10px] text-pink-600 font-normal">Registrar nacimiento</p>
+              </div>
+              <span className="text-pink-400">›</span>
+            </button>
+            <div className="w-full bg-gray-50 border border-gray-200 text-gray-400 font-bold py-3 rounded-xl text-sm flex items-center gap-3 px-4 cursor-not-allowed">
+              <span className="text-2xl opacity-50">💊</span>
+              <div className="text-left flex-1">
+                <p className="font-black">Sanidad masiva</p>
+                <p className="text-[10px] font-normal">Próximamente</p>
+              </div>
+            </div>
+          </div>
+        </Modal>
+      )}
       {confirmDialog}
       {showRenombrar&&<NuevoLoteModal loteEditar={lote} onClose={function(){setShowRenombrar(false);}} onSave={function(nombre){setLotes(function(prev){return prev.map(function(l){return l.id===loteId?Object.assign({},l,{nombre}):l;});});}}/>}
     </div>
