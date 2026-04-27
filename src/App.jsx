@@ -4617,7 +4617,8 @@ export default function AppConAuth(){
         var locales=leerStorage("ganadera_establecimientos_v1",null);
         if(!locales||JSON.stringify(locales)!==JSON.stringify(data.establecimientos)){
           guardarStorage("ganadera_establecimientos_v1",data.establecimientos);
-          window.location.reload();
+          // Disparar evento custom para que la app actualice el estado sin recargar
+          window.dispatchEvent(new CustomEvent("rodeo:datos-actualizados",{detail:data.establecimientos}));
         }
       }
     }
@@ -4731,6 +4732,29 @@ function AppLogueado({user,syncError}){
     // Sincronizar a Firestore con debounce
     if(user)sincronizarArriba(user.uid,{establecimientos:establecimientos});
   },[establecimientos,user]);
+
+  // Escuchar actualizaciones desde Firestore (en lugar de hacer reload)
+  useEffect(function(){
+    function onDatosActualizados(e){
+      if(e&&e.detail&&Array.isArray(e.detail)){
+        setEstablecimientos(e.detail);
+      }
+    }
+    window.addEventListener("rodeo:datos-actualizados",onDatosActualizados);
+    return function(){window.removeEventListener("rodeo:datos-actualizados",onDatosActualizados);};
+  },[]);
+
+  // Auto-sincronizar cuando vuelve internet
+  useEffect(function(){
+    function onlineHandler(){
+      if(user&&establecimientos){
+        console.log("Volvió internet → sincronizando...");
+        sincronizarArriba(user.uid,{establecimientos:establecimientos});
+      }
+    }
+    window.addEventListener("online",onlineHandler);
+    return function(){window.removeEventListener("online",onlineHandler);};
+  },[user,establecimientos]);
 
   var estActivo=estActivoId?establecimientos.find(function(e){return e.id===estActivoId;}):null;
 
