@@ -4624,8 +4624,19 @@ export default function AppConAuth(){
     }
 
     if(typeof navigator!=="undefined"&&navigator.onLine){
-      // Online: traer del servidor
+      // Online: traer del servidor con timeout duro de 4 segundos
+      var timedOut=false;
+      var timeoutId=setTimeout(function(){
+        timedOut=true;
+        console.log("getDoc tardó mucho, usando cache");
+        getDocFromCache(ref).then(function(snap){
+          if(snap.exists())aplicarDatos(snap.data());
+        }).catch(function(){});
+      },4000);
+
       getDoc(ref).then(function(snap){
+        if(timedOut)return;
+        clearTimeout(timeoutId);
         if(snap.exists()){
           aplicarDatos(snap.data());
         }else{
@@ -4639,6 +4650,8 @@ export default function AppConAuth(){
           }
         }
       }).catch(function(err){
+        if(timedOut)return;
+        clearTimeout(timeoutId);
         console.log("getDoc error (intentando cache):",err.message);
         // Si falla online, intentar cache
         getDocFromCache(ref).then(function(snap){
