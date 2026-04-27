@@ -8,3 +8,12 @@ ReactDOM.createRoot(document.getElementById('root')).render(
     <App />
   </React.StrictMode>,
 )
+
+// 👇 AGREGADO (NO TOCAR)
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js")
+      .then(() => console.log("Service Worker listo"))
+      .catch((err) => console.log("Error:", err));
+  });
+}
