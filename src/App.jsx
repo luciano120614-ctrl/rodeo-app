@@ -4623,16 +4623,18 @@ export default function AppConAuth(){
       }
     }
 
+    // Estrategia: cargar SIEMPRE el caché primero (instantáneo), después actualizar desde servidor en segundo plano
+    // Esto hace que la app aparezca al toque siempre, incluso con señal débil
+
+    // 1. Cargar caché al toque (siempre, sin esperar)
+    getDocFromCache(ref).then(function(snap){
+      if(snap.exists())aplicarDatos(snap.data());
+    }).catch(function(){});
+
+    // 2. Si hay internet, actualizar desde servidor en segundo plano (con timeout)
     if(typeof navigator!=="undefined"&&navigator.onLine){
-      // Online: traer del servidor con timeout duro de 4 segundos
       var timedOut=false;
-      var timeoutId=setTimeout(function(){
-        timedOut=true;
-        console.log("getDoc tardó mucho, usando cache");
-        getDocFromCache(ref).then(function(snap){
-          if(snap.exists())aplicarDatos(snap.data());
-        }).catch(function(){});
-      },4000);
+      var timeoutId=setTimeout(function(){timedOut=true;},5000);
 
       getDoc(ref).then(function(snap){
         if(timedOut)return;
@@ -4652,17 +4654,8 @@ export default function AppConAuth(){
       }).catch(function(err){
         if(timedOut)return;
         clearTimeout(timeoutId);
-        console.log("getDoc error (intentando cache):",err.message);
-        // Si falla online, intentar cache
-        getDocFromCache(ref).then(function(snap){
-          if(snap.exists())aplicarDatos(snap.data());
-        }).catch(function(){});
+        console.log("getDoc error:",err.message);
       });
-    }else{
-      // Offline: solo cache (instantáneo)
-      getDocFromCache(ref).then(function(snap){
-        if(snap.exists())aplicarDatos(snap.data());
-      }).catch(function(){});
     }
 
     // Suscribirse para updates en tiempo real
