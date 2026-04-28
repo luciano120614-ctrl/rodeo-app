@@ -4572,6 +4572,18 @@ export default function AppConAuth(){
           });
         });
       }
+
+      // Storage Persistente: pedir al navegador que NO borre nuestros datos
+      // aunque le falte espacio. Evita perder caché offline de un día para otro.
+      if(navigator.storage&&navigator.storage.persist){
+        navigator.storage.persisted().then(function(yaPersistido){
+          if(!yaPersistido){
+            navigator.storage.persist().then(function(concedido){
+              console.log("Storage persistente:",concedido?"✓ concedido":"✗ denegado");
+            }).catch(function(){});
+          }
+        }).catch(function(){});
+      }
     }catch(e){}
   },[]);
 
