@@ -3936,21 +3936,6 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
             })()}
 
             <button onClick={function(){setShowRepro(true);}} style={{boxShadow:"0 1px 3px rgba(0,0,0,0.12)"}} className="w-full bg-rose-300 text-white font-black py-3 rounded-xl text-base border border-rose-300">🐄 Gestión Reproductiva</button>
-            <div className="grid grid-cols-3 gap-2">
-              {[
-                {icon:"🐄",val:animales.length,label:"Total"},
-                {icon:"⚥",val:totalMachos+"M / "+totalHembras+"H",label:"Sexo"},
-                {icon:"📈",val:gdpProm?gdpProm+" kg/d":"—",label:"GDP prom."}
-              ].map(function(s){
-                return(
-                  <div key={s.label} style={{background:"#ffffff"}} className=" border border-gray-200 rounded-2xl p-3 text-center">
-                    <p className="text-base">{s.icon}</p>
-                    <p className="text-gray-900 font-bold text-sm leading-tight mt-0.5">{s.val}</p>
-                    <p className="text-[9px] text-gray-400 mt-0.5 uppercase tracking-wider">{s.label}</p>
-                  </div>
-                );
-              })}
-            </div>
 
             <div className="flex flex-col gap-2">
               <div className="flex gap-2">
