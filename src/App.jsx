@@ -3941,8 +3941,13 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
 
             <div className="flex flex-col gap-2">
               <div className="flex gap-2">
-                <input value={busq} onChange={function(e){setBusq(e.target.value);}} placeholder="🔍 Buscar caravana..."
-                  className="flex-1 bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-gray-900 text-sm focus:outline-none focus:border-emerald-400 placeholder-gray-400"/>
+                <div className="flex-1 relative">
+                  <input value={busq} onChange={function(e){setBusq(e.target.value);}} placeholder="🔍 Buscar caravana..."
+                    className="w-full bg-gray-50 border border-gray-200 rounded-xl pl-3 pr-10 py-3.5 text-gray-900 text-base focus:outline-none focus:border-emerald-400 placeholder-gray-400"/>
+                  {busq&&(
+                    <button onClick={function(){setBusq("");}} className="absolute right-2 top-1/2 -translate-y-1/2 bg-gray-200 hover:bg-gray-300 active:scale-95 text-gray-600 font-bold w-7 h-7 rounded-full flex items-center justify-center text-sm transition-all" title="Borrar búsqueda">✕</button>
+                  )}
+                </div>
                 <button onClick={function(){setFiltrosVisible(function(v){return !v;});}} className={"px-3 py-2 rounded-xl text-xs font-bold border "+(hayFiltros?"bg-emerald-200 border-emerald-400 text-gray-900":"bg-gray-50 border-gray-200 text-gray-500")}>
                   {"⚙ Filtros"+(hayFiltros?" ("+(([filtroCateg,filtroSexo,filtroPesoMin,filtroPesoMax].filter(Boolean).length)+")"):"") }
                 </button>
