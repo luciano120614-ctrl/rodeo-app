@@ -2899,6 +2899,7 @@ function VendidosModal({est,onClose,onEliminar}){
   var [busq,setBusq]=useState("");
   var [anioFiltro,setAnioFiltro]=useState("");
   var [detalle,setDetalle]=useState(null);
+  var busqRef=useRef();
   var vendidos=est.vendidos||[];
   var vendidosOrdenados=[...vendidos].sort(function(a,b){return (b.venta.fecha||"").localeCompare(a.venta.fecha||"");});
   var aniosDisp=aniosDe(vendidos,function(v){return v.venta.fecha;});
@@ -3034,8 +3035,13 @@ function VendidosModal({est,onClose,onEliminar}){
         )}
 
         {totalAnimGral>0&&(
-          <input value={busq} onChange={function(e){setBusq(e.target.value);}} placeholder="🔍 Buscar caravana o comprador..."
-            style={{background:"#f9fafb"}} className="border border-gray-200 rounded-xl px-3 py-2.5 text-gray-900 text-sm focus:outline-none w-full"/>
+          <div className="relative w-full">
+            <input ref={busqRef} value={busq} onChange={function(e){setBusq(e.target.value);}} placeholder="🔍 Buscar caravana o comprador..."
+              style={{background:"#f9fafb"}} className="w-full border border-gray-200 rounded-xl pl-3 pr-10 py-3.5 text-gray-900 text-base focus:outline-none focus:border-emerald-400"/>
+            {busq&&(
+              <button onClick={function(){setBusq("");if(busqRef.current)busqRef.current.focus();}} className="absolute right-2 top-1/2 -translate-y-1/2 bg-gray-200 hover:bg-gray-300 active:scale-95 text-gray-600 font-bold w-7 h-7 rounded-full flex items-center justify-center text-sm transition-all" title="Borrar búsqueda">✕</button>
+            )}
+          </div>
         )}
 
         {totalAnimGral===0&&(
@@ -3330,6 +3336,7 @@ function AgroVistaLote({agro,onUpdate,loteNombre}){
   var [potreroActivo,setPotreroActivo]=useState(null);
   var [busqPot,setBusqPot]=useState("");
   var [mostrarNuevo,setMostrarNuevo]=useState(false);
+  var busqPotRef=useRef();
   var [formPot,setFormPot]=useState({nombre:"",hectareas:"",desc:""});
   var [formAct,setFormAct]=useState({fecha:hoy(),actividad:"",cultivo:"",obs:"",kgCosecha:"",potrero:""});
   var [formGasto,setFormGasto]=useState({fecha:hoy(),concepto:"",monto:"",potrero:""});
@@ -3371,8 +3378,13 @@ function AgroVistaLote({agro,onUpdate,loteNombre}){
         <div className="flex flex-col gap-3">
           {!potreroActivo&&(
             <div className="flex flex-col gap-3">
-              <input value={busqPot} onChange={function(e){setBusqPot(e.target.value);}} placeholder="🔍 Buscar potrero..."
-                style={{background:"#f9fafb"}} className=" border border-gray-200 rounded-xl px-3 py-2.5 text-gray-900 text-sm focus:outline-none w-full"/>
+              <div className="relative w-full">
+                <input ref={busqPotRef} value={busqPot} onChange={function(e){setBusqPot(e.target.value);}} placeholder="🔍 Buscar potrero..."
+                  style={{background:"#f9fafb"}} className="w-full border border-gray-200 rounded-xl pl-3 pr-10 py-3.5 text-gray-900 text-base focus:outline-none focus:border-emerald-400"/>
+                {busqPot&&(
+                  <button onClick={function(){setBusqPot("");if(busqPotRef.current)busqPotRef.current.focus();}} className="absolute right-2 top-1/2 -translate-y-1/2 bg-gray-200 hover:bg-gray-300 active:scale-95 text-gray-600 font-bold w-7 h-7 rounded-full flex items-center justify-center text-sm transition-all" title="Borrar búsqueda">✕</button>
+                )}
+              </div>
               {mostrarNuevo?(
                 <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 flex flex-col gap-3">
                   <Inp label="Nombre" placeholder="Ej: Potrero Norte" value={formPot.nombre} onChange={function(e){setPot("nombre",e.target.value);}}/>
