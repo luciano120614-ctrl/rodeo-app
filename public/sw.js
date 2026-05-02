@@ -1,21 +1,26 @@
 // public/sw.js - Service Worker para funcionar offline
-// Estrategia: cache-first para assets de la app, network-only para Firebase
-var CACHE = 'rodeo-v4';
+// Estrategia: cache-first agresivo con pre-cache automático de assets de la app
+var CACHE = 'rodeo-v6';
 
-// Archivos esenciales para que la app funcione offline
+// Archivos esenciales mínimos
 var ARCHIVOS_ESENCIALES = [
   '/',
-  '/index.html'
+  '/index.html',
+  '/manifest.json',
+  '/icon-192.png',
+  '/icon-512.png'
 ];
 
 self.addEventListener('install', function(e){
   self.skipWaiting();
-  // Pre-cachear archivos esenciales al instalar
   e.waitUntil(
     caches.open(CACHE).then(function(cache){
-      return cache.addAll(ARCHIVOS_ESENCIALES).catch(function(err){
-        console.log('SW: error al pre-cachear:', err);
-      });
+      // Pre-cachear esenciales (no fallar si alguno no existe)
+      return Promise.all(
+        ARCHIVOS_ESENCIALES.map(function(url){
+          return cache.add(url).catch(function(){});
+        })
+      );
     })
   );
 });
@@ -26,6 +31,17 @@ self.addEventListener('activate', function(e){
       return Promise.all(keys.filter(function(k){return k!==CACHE;}).map(function(k){return caches.delete(k);}));
     }).then(function(){return self.clients.claim();})
   );
+});
+
+// Mensaje desde la app para forzar pre-cache de assets descubiertos
+self.addEventListener('message', function(e){
+  if(e.data && e.data.type === 'PRECACHE_ASSETS' && Array.isArray(e.data.urls)){
+    caches.open(CACHE).then(function(cache){
+      e.data.urls.forEach(function(url){
+        cache.add(url).catch(function(){});
+      });
+    });
+  }
 });
 
 self.addEventListener('fetch', function(e){
@@ -67,7 +83,7 @@ self.addEventListener('fetch', function(e){
         }).catch(function(){
           // Sin internet y sin cache: devolver página raíz cacheada
           return caches.match('/').then(function(r){return r || caches.match('/index.html');}).then(function(r){
-            return r || new Response('<h1>Sin conexión</h1><p>Abrí la app con internet al menos una vez.</p>', {headers:{'Content-Type':'text/html'}});
+            return r || new Response('<h1>Sin conexion</h1><p>Abri la app con internet al menos una vez.</p>', {headers:{'Content-Type':'text/html'}});
           });
         });
       })
@@ -75,7 +91,7 @@ self.addEventListener('fetch', function(e){
     return;
   }
 
-  // Para assets (JS, CSS, imágenes): cache-first con network fallback
+  // Para assets (JS, CSS, imágenes, fuentes): cache-first con network fallback
   e.respondWith(
     caches.match(req).then(function(cached){
       if(cached){
@@ -88,9 +104,9 @@ self.addEventListener('fetch', function(e){
         }).catch(function(){});
         return cached;
       }
-      // No está en cache, intentar red
+      // No está en cache, intentar red y CACHEAR para futuro offline
       return fetch(req).then(function(resp){
-        if(resp && resp.status === 200 && (resp.type === 'basic' || resp.type === 'cors')){
+        if(resp && resp.status === 200 && (resp.type === 'basic' || resp.type === 'cors' || resp.type === 'opaque')){
           var clon = resp.clone();
           caches.open(CACHE).then(function(c){c.put(req, clon);}).catch(function(){});
         }
