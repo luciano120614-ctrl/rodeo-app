@@ -4570,7 +4570,28 @@ export default function AppConAuth(){
       // Se registra desde /sw.js (archivo real en public/) para que pueda interceptar cargas iniciales
       if("serviceWorker" in navigator){
         window.addEventListener("load",function(){
-          navigator.serviceWorker.register("/sw.js").catch(function(err){
+          navigator.serviceWorker.register("/sw.js").then(function(reg){
+            // Pre-cachear todos los assets JS/CSS que la app está usando ahora
+            // Así quedan en cache para próximas aperturas offline
+            function precachearAssets(){
+              try{
+                var urls=[];
+                document.querySelectorAll("script[src],link[rel='stylesheet'][href]").forEach(function(el){
+                  var u=el.src||el.href;
+                  if(u&&u.indexOf(location.origin)===0)urls.push(u);
+                });
+                if(urls.length>0&&navigator.serviceWorker.controller){
+                  navigator.serviceWorker.controller.postMessage({type:"PRECACHE_ASSETS",urls:urls});
+                }
+              }catch(e){}
+            }
+            // Ejecutar después de un delay para dar tiempo a que cargue todo
+            setTimeout(precachearAssets,3000);
+            // Y también cuando el SW tome control
+            navigator.serviceWorker.addEventListener("controllerchange",function(){
+              setTimeout(precachearAssets,1000);
+            });
+          }).catch(function(err){
             console.log("SW registration failed:",err);
           });
         });
