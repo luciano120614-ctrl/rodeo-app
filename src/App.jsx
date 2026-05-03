@@ -4534,8 +4534,9 @@ export default function AppConAuth(){
   // PWA: registrar service worker y manifest (se ejecuta al abrir la app, antes del login)
   useEffect(function(){
     try{
-      var iconSvg='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="96" fill="#10b981"/><text x="50%" y="58%" font-size="320" text-anchor="middle" dominant-baseline="middle">🐄</text></svg>';
-      var iconUrl="data:image/svg+xml;base64,"+btoa(iconSvg);
+      // Íconos reales del proyecto (en /public)
+      var icon192="/icon-192.png";
+      var icon512="/icon-512.png";
 
       var manifest={
         name:"Los Corrales - Gestión Ganadera",
@@ -4547,8 +4548,8 @@ export default function AppConAuth(){
         background_color:"#ffffff",
         theme_color:"#10b981",
         icons:[
-          {src:iconUrl,sizes:"192x192",type:"image/svg+xml",purpose:"any maskable"},
-          {src:iconUrl,sizes:"512x512",type:"image/svg+xml",purpose:"any maskable"}
+          {src:icon192,sizes:"192x192",type:"image/png",purpose:"any maskable"},
+          {src:icon512,sizes:"512x512",type:"image/png",purpose:"any maskable"}
         ]
       };
       var blob=new Blob([JSON.stringify(manifest)],{type:"application/json"});
@@ -4560,7 +4561,7 @@ export default function AppConAuth(){
 
       var appleIcon=document.querySelector('link[rel="apple-touch-icon"]');
       if(!appleIcon){appleIcon=document.createElement("link");appleIcon.rel="apple-touch-icon";document.head.appendChild(appleIcon);}
-      appleIcon.href=iconUrl;
+      appleIcon.href=icon512;
 
       var themeColor=document.querySelector('meta[name="theme-color"]');
       if(!themeColor){themeColor=document.createElement("meta");themeColor.name="theme-color";document.head.appendChild(themeColor);}
