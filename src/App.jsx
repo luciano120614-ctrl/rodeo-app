@@ -4449,7 +4449,7 @@ function LoginScreen(){
       <div className="max-w-sm w-full mx-auto px-4 pt-16 pb-8 flex flex-col gap-4">
         <div className="text-center mb-4">
           <p className="text-6xl mb-3">🐄</p>
-          <h1 className="text-3xl font-black text-gray-900 tracking-tight">Rodeo</h1>
+          <h1 className="text-3xl font-black text-gray-900 tracking-tight">Los Corrales</h1>
           <p className="text-gray-500 text-sm mt-1">Gestión ganadera y agrícola</p>
         </div>
 
@@ -4538,8 +4538,8 @@ export default function AppConAuth(){
       var iconUrl="data:image/svg+xml;base64,"+btoa(iconSvg);
 
       var manifest={
-        name:"Rodeo - Gestión Ganadera",
-        short_name:"Rodeo",
+        name:"Los Corrales - Gestión Ganadera",
+        short_name:"Los Corrales",
         description:"Gestión ganadera y agrícola",
         start_url:"/",
         display:"standalone",
@@ -4817,7 +4817,7 @@ function AppLogueado({user,syncError}){
       <header className="px-4 pt-6 pb-4 border-b border-gray-200">
         <div className="max-w-xl mx-auto flex items-center justify-between gap-2">
           <div className="min-w-0">
-            <h1 className="text-3xl font-black text-gray-900 tracking-tight">🐄 Rodeo</h1>
+            <h1 className="text-3xl font-black text-gray-900 tracking-tight">🐄 Los Corrales</h1>
             <p className="text-gray-500 text-xs truncate">{user?user.email:"Gestión ganadera y agrícola"}</p>
           </div>
           <div className="flex gap-2 shrink-0">
@@ -4832,7 +4832,7 @@ function AppLogueado({user,syncError}){
           <div className="flex flex-col gap-4 py-8">
             <div className="text-center">
               <p className="text-6xl mb-3">🐄</p>
-              <p className="text-2xl font-black text-gray-800 mb-1">¡Bienvenido a Rodeo!</p>
+              <p className="text-2xl font-black text-gray-800 mb-1">¡Bienvenido a Los Corrales!</p>
               <p className="text-sm text-gray-500">La app para gestionar tu campo</p>
             </div>
 
@@ -5065,7 +5065,7 @@ function BackupModal({establecimientos,setEstablecimientos,onBackupDone,onClose}
     var url=URL.createObjectURL(blob);
     var a=document.createElement("a");
     a.href=url;
-    a.download="rodeo-backup-"+hoyStr+".json";
+    a.download="loscorrales-backup-"+hoyStr+".json";
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -5089,7 +5089,7 @@ function BackupModal({establecimientos,setEstablecimientos,onBackupDone,onClose}
       alert("El backup es muy grande para WhatsApp. Mejor usá 'Descargar archivo' y compartilo desde ahí.");
       return;
     }
-    var txt="Backup Rodeo "+new Date().toLocaleDateString("es-AR")+"\n\n"+backupStr;
+    var txt="Backup Los Corrales "+new Date().toLocaleDateString("es-AR")+"\n\n"+backupStr;
     var url="https://wa.me/?text="+encodeURIComponent(txt);
     window.open(url,"_blank");
     marcarHecho();
