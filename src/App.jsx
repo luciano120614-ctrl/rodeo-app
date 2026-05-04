@@ -1002,7 +1002,7 @@ function SesionPesaje({loteId,allLotes,setLotes,nombreLote,sesionInicial,onPausa
 
   return(
     <div className="fixed inset-0 z-40 flex flex-col" style={{background:"#ffffff"}}>
-      <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700;900&display=swap" rel="stylesheet"/>
+
       {/* Header */}
       <div className="px-4 py-2 shrink-0 bg-white border-b border-gray-200">
         <div className="flex items-center justify-between">
@@ -3875,7 +3875,7 @@ function VistaLote({loteId,allLotes,setLotes,onBack,establecimientos,setEstablec
 
   return(
     <div className="min-h-screen" style={{background:"#ffffff",color:"#1a1a1a"}}>
-      <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700;900&display=swap" rel="stylesheet"/>
+
       <header className="px-4 py-2 sticky top-0 z-10" style={{background:"#ffffff",borderBottom:"1px solid #e5e7eb"}}>
         <div className="max-w-xl mx-auto">
           <div className="flex items-center justify-center gap-3 py-1">
@@ -4298,7 +4298,7 @@ function VistaEstablecimiento({estId,establecimientos,setEstablecimientos,onBack
 
   return(
     <div className="min-h-screen" style={{background:"#ffffff"}}>
-      <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700;900&display=swap" rel="stylesheet"/>
+
       <header className="px-4 py-2 sticky top-0 z-10" style={{background:"#ffffff",borderBottom:"1px solid #e5e7eb"}}>
         <div className="max-w-xl mx-auto">
           <div className="flex items-center justify-center py-1">
@@ -4814,7 +4814,7 @@ function AppLogueado({user,syncError}){
 
   return(
     <div className="min-h-screen" style={{background:"#ffffff"}}>
-      <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700;900&display=swap" rel="stylesheet"/>
+
       <header className="px-4 pt-6 pb-4 border-b border-gray-200">
         <div className="max-w-xl mx-auto flex items-center justify-between gap-2">
           <div className="min-w-0">
