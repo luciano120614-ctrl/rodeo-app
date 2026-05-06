@@ -7,24 +7,22 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
+      includeAssets: ['icon-192.png', 'icon-512.png'],
+      workbox: {
+        globPatterns: ['**/*.{js,css,html,png,svg,ico,woff,woff2}'],
+        navigateFallback: '/index.html',
+        cleanupOutdatedCaches: true,
+      },
       manifest: {
         name: 'Rodeo App',
         short_name: 'Rodeo',
-        start_url: '.',
+        start_url: '/',
         display: 'standalone',
         background_color: '#ffffff',
         theme_color: '#16a34a',
         icons: [
-          {
-            src: 'icon-192.png',
-            sizes: '192x192',
-            type: 'image/png'
-          },
-          {
-            src: 'icon-512.png',
-            sizes: '512x512',
-            type: 'image/png'
-          }
+          { src: 'icon-192.png', sizes: '192x192', type: 'image/png' },
+          { src: 'icon-512.png', sizes: '512x512', type: 'image/png' }
         ]
       }
     })
