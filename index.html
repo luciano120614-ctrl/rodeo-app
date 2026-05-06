@@ -4,28 +4,11 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Aplicación de rodeo</title>
-
-    <script src="https://cdn.tailwindcss.com"></script>
-
-    <!-- PWA -->
-    <link rel="manifest" href="/manifest.json" />
     <meta name="theme-color" content="#16a34a" />
-
-    <!-- 👇 IMPORTANTE -->
     <link rel="apple-touch-icon" href="/icon-192.png" />
   </head>
-
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
-
-    <!-- Registro del Service Worker -->
-    <script>
-      if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('/sw.js')
-          .then(() => console.log('SW registrado'))
-          .catch(err => console.log('Error SW:', err));
-      }
-    </script>
   </body>
 </html>
