@@ -1759,4 +1759,4 @@ function SanidadMasivaModal({lote,onClose,onUpdate,onCrearAlerta,onUpdateSesione
   if(modo==="manga"){
     var seleccionadosAnim=animales.filter(function(a){return seleccionados.indexOf(a.id)>=0;});
     return(
-      <Modal title={"💊 
+      <Modal title={"💊
